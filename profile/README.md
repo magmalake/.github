@@ -58,8 +58,8 @@ Apple M4, single core unless noted. Same machine, same files, reproducible via e
 | Parquet read, 1M rows (int64/double/dict) | **4.3 ms — 232M rows/s** | pyarrow 8.2 ms (we are 1.9× faster) |
 | Parquet write, 1M rows | 42 ms | pyarrow 31 ms |
 | Parquet read, 4 cores (`threads.parallel_for` over row groups) | 660M rows/s | memory-bandwidth-bound |
-| Iceberg append, 1M rows (files + manifests + commit) | 221 ms | PyIceberg ~150 ms |
-| Iceberg scan, 1M rows | being optimized — the decode underneath is 4.3 ms | PyIceberg 13–24 ms |
+| Iceberg append, 1M rows (files + manifests + commit) | 233 ms | PyIceberg ~150 ms |
+| Iceberg scan, 1M rows (zstd) | **35.8 ms — 28M rows/s** (12.1 ms on 4 workers) | pyarrow single-thread 26.8 ms on the same files; PyIceberg 7.9 ms (its thread pool) |
 | zstd decompress (libzstd FFI) | 10–14 GB/s | — |
 | lz4 block/frame (liblz4 FFI) | 8–19 GB/s | — |
 | snappy decompress (pure Mojo) | up to 20 GB/s incompressible, ~3 GB/s compressible | — |
