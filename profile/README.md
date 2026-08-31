@@ -66,7 +66,8 @@ Apple M4, single core unless noted. Same machine, same files, reproducible via e
 | CRC-32 / murmur3 / XXH64 (pure Mojo) | 1.2–1.5 GB/s | — |
 | Parquet footer, 1,000 cols × 50 row groups | 78 ms read, 8 ms write | — |
 | HTTP range read, reused connection | 0.15 ms/request local, 0.52 ms signed S3 (MinIO) | 19× / 11× vs fresh connections |
-| SHA-256 (pure Mojo) | 60 MB/s | — |
+| S3 multipart upload, 16 MB (MinIO) | **409 MB/s** | was 53 MB/s when hashing was scalar |
+| SHA-256 (pure Mojo, ARMv8/SHA-NI hardware paths) | **2.7 GB/s** (610 MB/s scalar fallback) | OpenSSL 3.2 GB/s |
 
 ## Correctness bar
 
