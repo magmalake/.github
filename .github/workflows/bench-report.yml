@@ -65,9 +65,10 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.0
         with:
-          # Pinned: the committed lock file is written by 0.71.1, and an
-          # unpinned pixi rejects it as not up-to-date with the workspace.
-          pixi-version: v0.71.1
+          # Pinned so every tin resolves the same build backend. 0.78 is the
+          # first pixi that can use pixi-build-mojo 0.2.7, which is what emits
+          # `.mojoc` rather than the deprecated `.mojopkg`.
+          pixi-version: v0.78.0
           environments: ${{ inputs.env }}
 
       - name: Set up fixtures
