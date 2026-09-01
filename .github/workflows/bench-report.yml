@@ -65,10 +65,13 @@ jobs:
 
       - uses: prefix-dev/setup-pixi@v0.9.0
         with:
-          # Pinned so every tin resolves the same build backend. 0.78 is the
-          # first pixi that can use pixi-build-mojo 0.2.7, which is what emits
-          # `.mojoc` rather than the deprecated `.mojopkg`.
-          pixi-version: v0.78.0
+          # 0.71.1 deliberately, even though most tins are on 0.78 locks now:
+          # this workflow is shared, and the compatibility runs one way only.
+          # 0.78 rejects a lock written by 0.71.1, while 0.71.1 reads locks
+          # written by either. avro, parquet and iceberg had to stay on 0.71
+          # because the .mojoc artifacts 0.78 produces break their nightly
+          # environments, so the shared job has to accept both.
+          pixi-version: v0.71.1
           environments: ${{ inputs.env }}
 
       - name: Set up fixtures
