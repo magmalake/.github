@@ -34,3 +34,11 @@ Apple M4, single core, reproducible via each repo's `pixi run bench`. The rest â
 ## Full detail: [magmalake.org](https://magmalake.org)
 
 The site has the complete performance tables, the correctness bar each tin is gated on, the upstream bugs this surfaced in PyIceberg/pyarrow/iceberg-rust, and what's not yet implemented.
+
+## Proposals and issues
+
+What is proposed but unbuilt lives in **[the issue tracker](https://github.com/magmalake/.github/issues)** (short link: [magmalake.org/issues](https://magmalake.org/issues)). Open right now:
+
+- [#1 â€” postgres.mojo](https://github.com/magmalake/.github/issues/1): a libpq-backed PostgreSQL tin, which would let the Iceberg SQL catalog run on something other than a local file.
+
+Requests for a tin are welcome there.
