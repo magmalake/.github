@@ -1,0 +1,127 @@
+# Reusable: run a tin's benchmarks and publish the history to its gh-pages.
+#
+# Every magmalake tin benchmarks through magmalake/bench.mojo, so the whole
+# pipeline lives here once rather than eight times. A tin calls it with:
+#
+#   jobs:
+#     bench:
+#       uses: magmalake/.github/.github/workflows/bench-report.yml@main
+#       permissions:
+#         contents: write
+#
+# On a pull request it runs the benchmarks and publishes nothing — the point
+# is to catch a bench that stopped compiling, not to record numbers from a
+# branch. On a push to the default branch it appends to the history.
+#
+# The history is keyed by machine, so numbers from this runner never get
+# averaged with numbers taken on a laptop. Expect GitHub runners to be noisier
+# and slower than a workstation; the regression rule widens its threshold to
+# match, and the two series stay visibly separate on the dashboard.
+
+name: Benchmark report
+
+on:
+  workflow_call:
+    inputs:
+      env:
+        description: Pixi environment holding the bench task.
+        type: string
+        default: bench
+      task:
+        description: Pixi task that runs the benchmarks.
+        type: string
+        default: bench
+      args:
+        description: Extra arguments for the harness, e.g. "--skip bench_slow".
+        type: string
+        default: ""
+      runs-on:
+        description: Runner. Keep it fixed — changing it starts a new series.
+        type: string
+        default: ubuntu-latest
+      setup:
+        description: Shell run before the benchmarks, for generated fixtures.
+        type: string
+        default: ""
+      publish:
+        description: Set false for a repo whose benchmarks need a live service.
+        type: boolean
+        default: true
+
+jobs:
+  bench:
+    name: bench (${{ inputs.runs-on }})
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The harness repo carries the publisher and the dashboard, so both stay
+      # in one place and every tin picks up fixes without its own commit.
+      - name: Check out the harness tooling
+        uses: actions/checkout@v4
+        with:
+          repository: magmalake/bench.mojo
+          path: .bench-tools
+
+      - uses: prefix-dev/setup-pixi@v0.9.0
+        with:
+          # Pinned: the committed lock file is written by 0.71.1, and an
+          # unpinned pixi rejects it as not up-to-date with the workspace.
+          pixi-version: v0.71.1
+          environments: ${{ inputs.env }}
+
+      - name: Set up fixtures
+        if: inputs.setup != ''
+        run: ${{ inputs.setup }}
+
+      - name: Run benchmarks
+        run: >
+          pixi run -e ${{ inputs.env }} ${{ inputs.task }} --
+          ${{ inputs.args }} --out "$GITHUB_WORKSPACE/report.json"
+
+      - name: Check out gh-pages
+        if: inputs.publish && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          path: gh-pages-out
+
+      - name: Fold into the history
+        if: inputs.publish && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          python3 .bench-tools/tools/publish.py \
+            --report report.json \
+            --out-dir gh-pages-out \
+            --repo-root .
+          mkdir -p gh-pages-out/benchmarks
+          cp .bench-tools/benchmarks/index.html gh-pages-out/benchmarks/index.html
+
+      - uses: peaceiris/actions-gh-pages@v4
+        if: inputs.publish && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./gh-pages-out
+          # Anything already on the branch stays: the history file is the
+          # point, and clobbering it would restart every series.
+          keep_files: true
+
+      # Useful on a pull request, where nothing is published: the numbers are
+      # still in the log, and a bench that fails to build fails the job.
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f report.json ]; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          d = json.load(open("report.json"))
+          h = d["host"]
+          print(f"### Benchmarks on `{h.get('cpu') or 'unknown cpu'}`\n")
+          print(f"{h['os']}/{h['arch']} · {h['physical_cores']} cores\n")
+          print("| benchmark | mean (ns) | spread | reps |")
+          print("|---|---:|---:|---:|")
+          for r in d["results"]:
+              spread = f"{r['min_ns']:.0f} – {r['max_ns']:.0f}"
+              print(f"| `{r['name']}` | {r['mean_ns']:.0f} | {spread} | {r['reps']} |")
+          PY
+          fi
