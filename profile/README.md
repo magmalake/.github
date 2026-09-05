@@ -8,25 +8,26 @@ Mojo can open an Iceberg table today without reaching back through Python or the
 
 ## The tins
 
-| tin | what it is | version |
+| tin | what it is | benchmarks |
 |---|---|---|
-| [iceberg](https://github.com/magmalake/iceberg.mojo) | Native Apache Iceberg: metadata v1–v3, scan planning, reads, writes (fast-append, delete, overwrite, expire), REST and SQL catalogs | 0.6.5 |
-| [parquet](https://github.com/magmalake/parquet.mojo) | The first native Parquet reader/writer in Mojo, Arrow C Data Interface out, multi-core reads | 0.5.0 |
-| [avro](https://github.com/magmalake/avro.mojo) | Object Container Files, read + write, all four codecs, schema-compiled cursor | 0.3.2 |
-| [objectstore](https://github.com/magmalake/objectstore.mojo) | FileIO over local, HTTP(S), S3, GCS, Azure; pooled libcurl transport | 0.3.1 |
-| [postgres](https://github.com/magmalake/postgres.mojo) | libpq binding: queries, parameters, COPY, transactions — the deployable SQL catalog | 0.2.0 |
-| [sqlite](https://github.com/magmalake/sqlite.mojo) | libsqlite3 binding; the local-development SQL catalog | 0.3.2 |
-| [roaring](https://github.com/magmalake/roaring.mojo) | 32/64-bit Roaring bitmaps, Iceberg deletion-vector framing | 0.1.1 |
-| [thrift](https://github.com/magmalake/thrift.mojo) | Compact + binary protocol runtime and the `parquet.thrift` structs | 0.1.1 |
-| [threads](https://github.com/magmalake/threads.mojo) | pthreads for Mojo — spawn/join/pin, atomics, typed `parallel_for`, worker pools | 0.4.0 |
-| [zstd](https://github.com/magmalake/zstd.mojo) | FFI binding to libzstd | 0.1.2 |
-| [lz4](https://github.com/magmalake/lz4.mojo) | FFI binding to liblz4 (block, frame, Hadoop framing) | 0.1.1 |
-| [brotli](https://github.com/magmalake/brotli.mojo) | FFI binding to libbrotli | 0.1.1 |
-| [snappy](https://github.com/magmalake/snappy.mojo) | Pure-Mojo Snappy, raw + framing | 0.1.2 |
-| [hashes](https://github.com/magmalake/hashes.mojo) | CRC-32, MurmurHash3 x86-32, XXH64 + Iceberg bucket transform | 0.1.1 |
-| [iceberg-rs](https://github.com/magmalake/iceberg-rs.mojo) | Rust cdylib over iceberg-rust, kept as a cross-implementation oracle | 0.1.0 |
+| [iceberg](https://github.com/magmalake/iceberg.mojo) | Native Apache Iceberg: metadata v1–v3, scan planning, reads, writes (fast-append, delete, overwrite, expire), REST and SQL catalogs | — |
+| [parquet](https://github.com/magmalake/parquet.mojo) | The first native Parquet reader/writer in Mojo, Arrow C Data Interface out, multi-core reads | [history](https://magmalake.github.io/parquet.mojo/benchmarks/) |
+| [avro](https://github.com/magmalake/avro.mojo) | Object Container Files, read + write, all four codecs, schema-compiled cursor | [history](https://magmalake.github.io/avro.mojo/benchmarks/) |
+| [objectstore](https://github.com/magmalake/objectstore.mojo) | FileIO over local, HTTP(S), S3, GCS, Azure; pooled libcurl transport | — |
+| [postgres](https://github.com/magmalake/postgres.mojo) | libpq binding: queries, parameters, COPY, transactions — the deployable SQL catalog | — |
+| [sqlite](https://github.com/magmalake/sqlite.mojo) | libsqlite3 binding; the local-development SQL catalog | — |
+| [roaring](https://github.com/magmalake/roaring.mojo) | 32/64-bit Roaring bitmaps, Iceberg deletion-vector framing | [history](https://magmalake.github.io/roaring.mojo/benchmarks/) |
+| [thrift](https://github.com/magmalake/thrift.mojo) | Compact + binary protocol runtime and the `parquet.thrift` structs | [history](https://magmalake.github.io/thrift.mojo/benchmarks/) |
+| [threads](https://github.com/magmalake/threads.mojo) | pthreads for Mojo — spawn/join/pin, atomics, typed `parallel_for`, worker pools | — |
+| [zstd](https://github.com/magmalake/zstd.mojo) | FFI binding to libzstd | [history](https://magmalake.github.io/zstd.mojo/benchmarks/) |
+| [lz4](https://github.com/magmalake/lz4.mojo) | FFI binding to liblz4 (block, frame, Hadoop framing) | [history](https://magmalake.github.io/lz4.mojo/benchmarks/) |
+| [brotli](https://github.com/magmalake/brotli.mojo) | FFI binding to libbrotli | — |
+| [snappy](https://github.com/magmalake/snappy.mojo) | Pure-Mojo Snappy, raw + framing | [history](https://magmalake.github.io/snappy.mojo/benchmarks/) |
+| [hashes](https://github.com/magmalake/hashes.mojo) | CRC-32, MurmurHash3 x86-32, XXH64 + Iceberg bucket transform | [history](https://magmalake.github.io/hashes.mojo/benchmarks/) |
+| [iceberg-rs](https://github.com/magmalake/iceberg-rs.mojo) | Rust cdylib over iceberg-rust, kept as a cross-implementation oracle | — |
 
 All Apache-2.0, CI-tested on stable Mojo 1.0.0 and the current nightly, macOS and Linux.
+Versions are deliberately not listed here — they move faster than this file does. `shelf info <tin>-mojo`, or [mojoshelf.org](https://mojoshelf.org), always has the current one. Where a tin publishes a benchmark history, CI appends to it on every push to `main`.
 
 ## A few of the numbers
 
