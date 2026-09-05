@@ -38,6 +38,23 @@ Apple M4, reproducible via each repo's `pixi run bench`. Medians, with the tails
 
 Where it loses is on the site too, with the reason: threaded pyarrow is still ahead on nested reads, and the remaining gap is measured rather than estimated.
 
+## Agent skill
+
+`writing-performant-data-code` is what building this stack taught us about making data code fast and about producing numbers that survive being checked — measurement discipline, optimisation rules with their evidence attached, the tests that catch a fast path which silently never fires, and the Mojo ownership and threading hazards underneath. It lives in [`skills/`](https://github.com/magmalake/.github/tree/main/skills) in this repo:
+
+```sh
+npx skills add magmalake/.github --skill writing-performant-data-code --yes
+```
+
+That installs it for whichever agents are found on the machine. To name them, pass them **space-separated** — the flag is variadic, and a comma-separated list is rejected:
+
+```sh
+npx skills add magmalake/.github --skill writing-performant-data-code \
+  --agent claude-code codex cursor github-copilot --yes
+```
+
+Claude Code gets a symlink under `.claude/skills`; Codex, Cursor and GitHub Copilot share the universal `.agents/skills`. Add `-g` to install for the user rather than the project.
+
 ## Full detail: [magmalake.org](https://magmalake.org)
 
 [Performance](https://magmalake.org/performance) · [Correctness](https://magmalake.org/correctness) · [Status](https://magmalake.org/status) · [Writing](https://magmalake.org/blog)
