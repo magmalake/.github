@@ -1,0 +1,62 @@
+# Org-wide: are any rev-less pixi dependencies frozen at an old commit?
+#
+# A dependency written without a rev means "track that sibling", and pixi does
+# not: the lock keeps whatever it first resolved. The failure is silent -- the
+# consuming repository's tests pass, because a stale sibling is usually a
+# working sibling, just an old one.
+#
+# What it cost once: three repositories sat pinned at zstd.mojo's first commit
+# for two weeks, dlopening the codec shim on every decompressed Parquet page,
+# and a 79.5M-row scan took 2687 ms instead of 262. Every test suite was green
+# throughout. See tools/check_dep_drift.py.
+#
+# Daily rather than per-PR on purpose. A lock legitimately lags for a day or
+# two after a sibling merges, so blocking pull requests on it would fail them
+# for somebody else's commit and teach everyone to merge past the check. A red
+# scheduled run names the repository and the dependency instead, and the
+# seven-day grace period keeps normal lag out of it.
+
+name: Dependency drift
+
+on:
+  schedule:
+    # 06:20 UTC. Off the hour because every cron on the hour queues together.
+    - cron: "20 6 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Grace period in days before a stale pin is reported.
+        type: string
+        default: "7"
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: rev-less pins behind their sibling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check every repository in the org
+        env:
+          # The default token reads this org's public repositories, which is
+          # all the check needs: two files and a HEAD sha per repository.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/check_dep_drift.py \
+            --days "${{ github.event.inputs.days || '7' }}" \
+            | tee drift.txt
+          exit ${PIPESTATUS[0]}
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo '## Dependency drift'
+            echo
+            echo '```'
+            cat drift.txt 2>/dev/null || echo "the check did not produce output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
