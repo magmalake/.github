@@ -63,15 +63,18 @@ jobs:
           repository: magmalake/bench.mojo
           path: .bench-tools
 
-      - uses: prefix-dev/setup-pixi@v0.9.0
+      - uses: prefix-dev/setup-pixi@v0.10.2
         with:
-          # 0.71.1 deliberately, even though most tins are on 0.78 locks now:
-          # this workflow is shared, and the compatibility runs one way only.
-          # 0.78 rejects a lock written by 0.71.1, while 0.71.1 reads locks
-          # written by either. avro, parquet and iceberg had to stay on 0.71
-          # because the .mojoc artifacts 0.78 produces break their nightly
-          # environments, so the shared job has to accept both.
-          pixi-version: v0.71.1
+          # 0.78.0, matching every tin's own CI and every lock in the org.
+          # This was 0.71.1 while avro, parquet and iceberg still wrote 0.71
+          # locks — 0.78 rejects those, 0.71.1 reads either, so the shared job
+          # took the lower version. They are all on 0.78 now, and holding here
+          # became the thing that broke: pixi 0.71.1 can only negotiate
+          # pixi-build-mojo 0.2.5, which hardcodes `-o …mojopkg`, and Mojo
+          # 1.1.0's `mojo precompile` refuses any output path that is not
+          # `.mojoc` ("output path must have a '.mojoc' extension"). Every
+          # tin's bench leg failed on that the moment the org crossed to 1.1.0.
+          pixi-version: v0.78.0
           environments: ${{ inputs.env }}
 
       - name: Set up fixtures
