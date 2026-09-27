@@ -26,7 +26,7 @@ Mojo can open an Iceberg table today without reaching back through Python or the
 | [hashes](https://github.com/magmalake/hashes.mojo) | CRC-32, MurmurHash3 x86-32, XXH64 + Iceberg bucket transform | 0.1.1 |
 | [iceberg-rs](https://github.com/magmalake/iceberg-rs.mojo) | Rust cdylib over iceberg-rust, kept as a cross-implementation oracle | 0.1.0 |
 
-All Apache-2.0, CI-tested on stable Mojo 1.0.0 and the current nightly, macOS and Linux.
+All Apache-2.0, CI-tested on stable Mojo 1.1.0 and the current nightly, macOS and Linux.
 
 ## A few of the numbers
 
