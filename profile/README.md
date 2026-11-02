@@ -38,22 +38,18 @@ Apple M4, reproducible via each repo's `pixi run bench`. Medians, with the tails
 
 Where it loses is on the site too, with the reason: threaded pyarrow is still ahead on nested reads, and the remaining gap is measured rather than estimated.
 
-## Agent skill
+## Agent skills
 
-`writing-performant-data-code` is what building this stack taught us about making data code fast and about producing numbers that survive being checked — measurement discipline, optimisation rules with their evidence attached, the tests that catch a fast path which silently never fires, and the Mojo ownership and threading hazards underneath. It lives in [`skills/`](https://github.com/magmalake/.github/tree/main/skills) in this repo:
+What building this stack taught us about making data code fast is packaged as agent skills in [magmalake/skills](https://github.com/magmalake/skills). There are two:
 
-```sh
-npx skills add magmalake/.github --skill writing-performant-data-code --yes
-```
-
-That installs it for whichever agents are found on the machine. To name them, pass them **space-separated** — the flag is variadic, and a comma-separated list is rejected:
+- **`writing-performant-data-code`** covers columnar readers, writers and codecs: measurement discipline, optimisation rules with their evidence attached, the tests that catch a fast path which silently never fires, and the Mojo ownership and threading hazards underneath.
+- **`mojo-data-performance`** covers a pipeline's per-row loops over record batches, and how to tell decoding time from your own work's time without a second implementation to compare against.
 
 ```sh
-npx skills add magmalake/.github --skill writing-performant-data-code \
-  --agent claude-code codex cursor github-copilot --yes
+npx skills add magmalake/skills --yes
 ```
 
-Claude Code gets a symlink under `.claude/skills`; Codex, Cursor and GitHub Copilot share the universal `.agents/skills`. Add `-g` to install for the user rather than the project.
+That installs them for whichever agents are found on the machine. To name the agents, pass them **space-separated**: the flag is variadic, and a comma-separated list is rejected. In Claude Code you can also install them as a plugin, with `/plugin marketplace add magmalake/skills` and then `/plugin install skills@magmalake`.
 
 ## Full detail: [magmalake.org](https://magmalake.org)
 
