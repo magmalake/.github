@@ -40,16 +40,13 @@ Where it loses is on the site too, with the reason: threaded pyarrow is still ah
 
 ## Agent skills
 
-What building this stack taught us about making data code fast is packaged as agent skills in [magmalake/skills](https://github.com/magmalake/skills). There are two:
-
-- **`writing-performant-data-code`** covers columnar readers, writers and codecs: measurement discipline, optimisation rules with their evidence attached, the tests that catch a fast path which silently never fires, and the Mojo ownership and threading hazards underneath.
-- **`mojo-data-performance`** covers a pipeline's per-row loops over record batches, and how to tell decoding time from your own work's time without a second implementation to compare against.
+What building this stack taught us about making data code fast is packaged as an agent skill, `mojo-data-performance`, in [magmalake/skills](https://github.com/magmalake/skills). It covers a pipeline's per-row loops over record batches and the readers, writers and codecs under them; how to tell decoding time from your own work's time without a second implementation to compare against; and the measurement discipline, the tests that catch a fast path which silently never fires, and the Mojo ownership and threading hazards underneath.
 
 ```sh
 npx skills add magmalake/skills --yes
 ```
 
-That installs them for whichever agents are found on the machine. To name the agents, pass them **space-separated**: the flag is variadic, and a comma-separated list is rejected. In Claude Code you can also install them as a plugin, with `/plugin marketplace add magmalake/skills` and then `/plugin install skills@magmalake`.
+That installs it for whichever agents are found on the machine. To name the agents, pass them **space-separated**: the flag is variadic, and a comma-separated list is rejected. In Claude Code you can also install it as a plugin, with `/plugin marketplace add magmalake/skills` and then `/plugin install skills@magmalake`.
 
 ## Full detail: [magmalake.org](https://magmalake.org)
 
