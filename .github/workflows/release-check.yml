@@ -50,6 +50,12 @@ on:
         description: Pixi environment the task runs in (the stable toolchain).
         type: string
         default: default
+      consumer-build:
+        description: >-
+          Run the consumer build. A second caller in the same repo (the bench
+          workflow, which only needs the verdict) sets this false.
+        type: boolean
+        default: true
       pixi-version:
         description: Pinned, because pixi rejects a lock written by another version.
         type: string
@@ -106,7 +112,7 @@ jobs:
   consumer-build:
     name: consumer build
     needs: classify
-    if: ${{ needs.classify.outputs.release_only == 'true' }}
+    if: ${{ needs.classify.outputs.release_only == 'true' && inputs.consumer-build }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
