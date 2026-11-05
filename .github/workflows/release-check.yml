@@ -1,0 +1,168 @@
+# Reusable: the short CI path for a release PR.
+#
+# A release PR only names a new version: version fields, CHANGELOG.md,
+# dependency revs, pixi.lock, pinned sibling commits. The code in it was tested
+# on the PR that wrote it, so running macOS, nightly, benchmarks, fuzzing, kind
+# and the data shards again is ten minutes per tin, one tin after another down
+# a release chain. This workflow decides, from the PR's diff (see
+# tools/release_only.py for the rules; anything it does not recognise is a
+# normal PR), and when the PR is release-only runs the two checks that can
+# still catch a bad release:
+#
+#   * a consumer's build: a scratch project that adds the tin at the PR's head
+#     commit the way `pixi shelf add` writes it, which catches duplicate
+#     records, a wrong rev, and a manifest that no longer resolves;
+#   * optionally the tin's unit tests on Linux stable (`task`).
+#
+# A tin calls it, and skips its own heavy jobs when the output says so:
+#
+#   jobs:
+#     release:
+#       if: github.event_name == 'pull_request'
+#       uses: magmalake/.github/.github/workflows/release-check.yml@main
+#       permissions:
+#         contents: read
+#         pull-requests: read
+#       with:
+#         task: ""    # its own stable / ubuntu-latest job runs the tests
+#
+#     test:
+#       needs: release
+#       if: ${{ !cancelled() && needs.release.outputs.release_only != 'true' }}
+#
+# `release_only` is "true" or "false". On anything but a pull request the whole
+# workflow is skipped and the output is empty, which callers read as "not
+# release-only".
+
+name: Release check
+
+on:
+  workflow_call:
+    inputs:
+      task:
+        description: >-
+          Pixi task that runs the unit tests on Linux. Empty skips the tests,
+          for a tin whose own stable Linux job already runs them (sibling
+          checkouts, say) on release PRs.
+        type: string
+        default: test
+      env:
+        description: Pixi environment the task runs in (the stable toolchain).
+        type: string
+        default: default
+      pixi-version:
+        description: Pinned, because pixi rejects a lock written by another version.
+        type: string
+        default: v0.78.0
+      mojo-compiler:
+        description: The compiler the scratch project pins, as `pixi add` writes it.
+        type: string
+        default: "==1.2.0"
+      tools-ref:
+        description: Ref of magmalake/.github to take the classifier from.
+        type: string
+        default: main
+    outputs:
+      release_only:
+        description: '"true" when the PR changes only versions, changelog, revs and locks.'
+        value: ${{ jobs.classify.outputs.release_only }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  classify:
+    name: classify
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    outputs:
+      release_only: ${{ steps.verdict.outputs.release_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: magmalake/.github
+          ref: ${{ inputs.tools-ref }}
+          path: .github-tools
+
+      - id: verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.number }}
+        run: |
+          release_only=false
+          # The diff endpoint refuses past 20000 lines; that, or any failure,
+          # is "not release-only".
+          if gh api -H 'Accept: application/vnd.github.diff' \
+               "repos/$GITHUB_REPOSITORY/pulls/$PR" > pr.diff; then
+            if python3 -I .github-tools/tools/release_only.py pr.diff; then
+              release_only=true
+            fi
+          else
+            echo "full suite: could not fetch the diff"
+          fi
+          echo "release_only=$release_only" >> "$GITHUB_OUTPUT"
+
+  consumer-build:
+    name: consumer build
+    needs: classify
+    if: ${{ needs.classify.outputs.release_only == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # Only for the tin's name: shelf.toml is the registry's record of it.
+      - uses: actions/checkout@v4
+
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: ${{ inputs.pixi-version }}
+          run-install: false
+
+      - name: Add the tin at the PR head to a scratch project
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          COMPILER: ${{ inputs.mojo-compiler }}
+        run: |
+          pkg=$(sed -n 's/^name *= *"\([^"]*\)".*/\1/p' shelf.toml | head -1)
+          [ -n "$pkg" ] || { echo "shelf.toml has no name"; exit 1; }
+          scratch=$(mktemp -d)
+          cd "$scratch"
+          # The lines orca's README gives a new project: Modular's channel,
+          # pixi's build preview, the compiler.
+          pixi init lake -c https://conda.modular.com/max -c conda-forge
+          cd lake
+          sed -i.bak 's/^\[workspace\]/[workspace]\npreview = ["pixi-build"]/' pixi.toml
+          pixi add "mojo-compiler$COMPILER"
+          # What `pixi shelf add` writes.
+          python3 - "$pkg" "https://github.com/$HEAD_REPO" "$HEAD_SHA" <<'PY'
+          import re, sys
+          pkg, git, rev = sys.argv[1:]
+          text = open("pixi.toml").read()
+          line = f'{pkg} = {{ git = "{git}", rev = "{rev}" }}\n'
+          if "[dependencies]" in text:
+              text = text.replace("[dependencies]\n", "[dependencies]\n" + line, 1)
+          else:
+              text += "\n[dependencies]\n" + line
+          open("pixi.toml", "w").write(text)
+          PY
+          cat pixi.toml
+          # Builds the tin and its pinned siblings from source.
+          pixi install
+          pixi list | grep -i "^$pkg " || { echo "$pkg is not in the environment"; exit 1; }
+
+  unit-tests:
+    name: unit tests (stable / ubuntu-latest)
+    needs: classify
+    if: ${{ needs.classify.outputs.release_only == 'true' && inputs.task != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: ${{ inputs.pixi-version }}
+          environments: ${{ inputs.env }}
+
+      - run: pixi run -e ${{ inputs.env }} ${{ inputs.task }}

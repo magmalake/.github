@@ -1,0 +1,18 @@
+# The unit tests for tools/ (the release-PR classifier).
+name: Tool tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["tools/**", "tests/**", ".github/workflows/test-tools.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -I -m unittest discover -s tests -v
