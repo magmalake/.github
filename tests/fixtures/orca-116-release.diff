@@ -1,0 +1,92 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 646efe7..64381e8 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -246,7 +246,7 @@ jobs:
+ 
+   # orca.tables over local Iceberg tables, and the taxi example. iceberg,
+   # parquet and their siblings compile from source at the revisions
+-  # iceberg-mojo 0.8.7 was published with (dista's data job uses the same
++  # iceberg-mojo 0.9.0 was published with (dista's data job uses the same
+   # set); memory-region at the fix that lets it share a binary with the
+   # standard library's file seek.
+   data:
+@@ -279,9 +279,9 @@ jobs:
+       - uses: actions/checkout@v4
+         with: {repository: magmalake/arrow-mlake.mojo, ref: 178aae6e0da0dbe105f9cb02632a51cfd35b9dda, path: arrow-mlake.mojo}
+       - uses: actions/checkout@v4
+-        with: {repository: magmalake/parquet.mojo, ref: c15f51aee06ccf73102810e7de143745abba6c90, path: parquet.mojo}
++        with: {repository: magmalake/parquet.mojo, ref: 714f66ef108716bc46ed8cdaee9d52e58bfde293, path: parquet.mojo}
+       - uses: actions/checkout@v4
+-        with: {repository: magmalake/iceberg.mojo, ref: 7dcab81b65d87c00385aed0e27a202168ea1e1a6, path: iceberg.mojo}
++        with: {repository: magmalake/iceberg.mojo, ref: 50eb8dc18835e4e1c8ed9d7a0ab19d31f9a1ad51, path: iceberg.mojo}
+       - uses: actions/checkout@v4
+         with: {repository: magmalake/threads.mojo, ref: f45e780a8de77278c140cee36904e46e93e0ca1c, path: threads.mojo}
+       - uses: actions/checkout@v4
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e6fab8c..22eebfe 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,11 @@
+ 
+ ## Unreleased
+ 
++## 0.3.4 (2026-11-04)
++
++- Built against iceberg-mojo 0.9.0 (parquet-mojo 0.12.0): data files go
++  through the streaming Parquet writer.
++
+ - **`/runs` filters are dropdowns, and the runs go back further than 100**
+   (#113). Pipeline, status and trigger are `<select>`s: the registered
+   pipelines; queued, running, deferred, succeeded, failed and cancelled;
+diff --git a/pixi.toml b/pixi.toml
+index 85fcd1e..359f842 100644
+--- a/pixi.toml
++++ b/pixi.toml
+@@ -2,7 +2,7 @@
+ authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
+ channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+ name = "orca.mojo"
+-version = "0.3.3"
++version = "0.3.4"
+ description = "Orchestration for Mojo data pipelines: DAGs in Mojo, cron schedules, a web UI."
+ preview = ["pixi-build"]
+ platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
+@@ -21,7 +21,7 @@ sqlite = ">=3.45,<4"
+ # revisions mojoshelf published of what it imports.
+ [package]
+ name = "orca-mojo"
+-version = "0.3.3"
++version = "0.3.4"
+ 
+ [package.build]
+ backend = { name = "pixi-build-mojo", version = "0.*" }
+@@ -36,7 +36,7 @@ extra-args = ["-I", "$PREFIX/lib/mojo"]
+ mojo-compiler = "==1.2.0"
+ dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "27e6e88df1b79fdc424314386a835d1d08b0db2a" }
+ k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
+-iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "7dcab81b65d87c00385aed0e27a202168ea1e1a6" }
++iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "50eb8dc18835e4e1c8ed9d7a0ab19d31f9a1ad51" }
+ postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
+ objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "ff66975c095f392695facc1b6dd56823dec914bc" }
+ arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
+@@ -55,7 +55,7 @@ libpq = ">=16,<19"
+ libsqlite = ">=3.45,<4"
+ dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "27e6e88df1b79fdc424314386a835d1d08b0db2a" }
+ k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
+-iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "7dcab81b65d87c00385aed0e27a202168ea1e1a6" }
++iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "50eb8dc18835e4e1c8ed9d7a0ab19d31f9a1ad51" }
+ postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
+ objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "ff66975c095f392695facc1b6dd56823dec914bc" }
+ arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
+diff --git a/shelf.toml b/shelf.toml
+index a25d7b1..99c32ab 100644
+--- a/shelf.toml
++++ b/shelf.toml
+@@ -1,5 +1,5 @@
+ name = "orca-mojo"
+-version = "0.3.3"
++version = "0.3.4"
+ description = "Orchestration for Mojo data pipelines: DAGs checked at compile time, cron and keyed partitions, sensors and lineage over Iceberg, runs recorded in Postgres or a SQLite file, each run on its own dista cluster locally, on Kubernetes or on EC2, and a web UI"
+ tags = ["orchestration", "pipelines", "scheduler", "dag", "iceberg", "kubernetes", "aws", "magmalake"]
+ # other tins this one depends on; omit if none

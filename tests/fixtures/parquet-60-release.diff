@@ -1,0 +1,72 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index f1933af..5c4b6e3 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -10,6 +10,10 @@ Releases before 0.8.0 predate this file; their contents are in the commit log
+ 
+ ## [Unreleased]
+ 
++## [0.12.0] - 2026-11-04
++
++Released together with parquet-full-mojo 0.1.9, from the same commit.
++
+ ### Added
+ 
+ - A streaming writer (magmalake/parquet.mojo#58). `ParquetWriter` holds
+diff --git a/full/pixi.toml b/full/pixi.toml
+index dc8bfc3..c236f8b 100644
+--- a/full/pixi.toml
++++ b/full/pixi.toml
+@@ -15,7 +15,7 @@
+ # the repo's workspace, the same shape zstd.mojo/shim uses.
+ [package]
+ name = "parquet-full-mojo"
+-version = "0.1.8"
++version = "0.1.9"
+ 
+ [package.build]
+ backend = { name = "pixi-build-mojo", version = "0.*" }
+diff --git a/full/shelf.toml b/full/shelf.toml
+index 8b71be1..798efa8 100644
+--- a/full/shelf.toml
++++ b/full/shelf.toml
+@@ -1,5 +1,5 @@
+ name = "parquet-full-mojo"
+-version = "0.1.8"
++version = "0.1.9"
+ description = "Every Parquet codec the spec defines — adds ZSTD, BROTLI and LZ4 to parquet-mojo, via libzstd/libbrotli/liblz4"
+ tags = ["parquet", "codec", "zstd", "brotli", "lz4", "compression", "magmalake"]
+ # Other tins this one depends on. parquet-mojo is deliberately absent: it is
+diff --git a/pixi.toml b/pixi.toml
+index 69963d0..2936fe4 100644
+--- a/pixi.toml
++++ b/pixi.toml
+@@ -2,7 +2,7 @@
+ authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
+ channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+ name = "parquet.mojo"
+-version = "0.11.7"
++version = "0.12.0"
+ description = "Native pure-Mojo Apache Parquet — footer, pages, every encoding, and Arrow output over the C Data Interface."
+ preview = ["pixi-build"]
+ platforms = ["osx-arm64", "linux-64"]
+@@ -114,7 +114,7 @@ lint-codecs = { cmd = "mojolint --lsp -I src -I tests -I ../arrow-mlake.mojo/src
+ # Conda package name is parquet-mojo; the Mojo import stays `from parquet import …`.
+ [package]
+ name = "parquet-mojo"
+-version = "0.11.7"
++version = "0.12.0"
+ 
+ [package.build]
+ backend = { name = "pixi-build-mojo", version = "0.*" }
+diff --git a/shelf.toml b/shelf.toml
+index 6153cda..46ed27e 100644
+--- a/shelf.toml
++++ b/shelf.toml
+@@ -1,5 +1,5 @@
+ name = "parquet-mojo"
+-version = "0.11.7"
++version = "0.12.0"
+ description = "Native pure-Mojo Apache Parquet reader and writer — every encoding, Arrow output over the C Data Interface"
+ tags = ["parquet", "arrow", "iceberg", "data-lake", "columnar", "magmalake"]
+ tins = [
