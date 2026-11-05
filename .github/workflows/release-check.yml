@@ -14,21 +14,32 @@
 #     records, a wrong rev, and a manifest that no longer resolves;
 #   * optionally the tin's unit tests on Linux stable (`task`).
 #
-# A tin calls it, and skips its own heavy jobs when the output says so:
+# A tin calls it twice. The first call is only the verdict, which its own jobs
+# wait for (a called workflow's outputs arrive when the whole workflow ends,
+# so the builds must not be in that call); the second runs the builds, on
+# release-only PRs only:
 #
 #   jobs:
 #     release:
 #       if: github.event_name == 'pull_request'
 #       uses: magmalake/.github/.github/workflows/release-check.yml@main
-#       permissions:
-#         contents: read
-#         pull-requests: read
+#       permissions: {contents: read, pull-requests: read}
+#       with: {classify-only: true}
+#
+#     release-check:
+#       needs: release
+#       if: needs.release.outputs.release_only == 'true'
+#       uses: magmalake/.github/.github/workflows/release-check.yml@main
+#       permissions: {contents: read, pull-requests: read}
 #       with:
 #         task: ""    # its own stable / ubuntu-latest job runs the tests
 #
 #     test:
 #       needs: release
-#       if: ${{ !cancelled() && needs.release.outputs.release_only != 'true' }}
+#       if: ${{ !cancelled() }}
+#       # ... and a matrix trimmed to the stable Linux leg when release_only
+#
+#     ci:    # the one required check, over every job above
 #
 # `release_only` is "true" or "false". On anything but a pull request the whole
 # workflow is skipped and the output is empty, which callers read as "not
@@ -50,12 +61,14 @@ on:
         description: Pixi environment the task runs in (the stable toolchain).
         type: string
         default: default
-      consumer-build:
+      classify-only:
         description: >-
-          Run the consumer build. A second caller in the same repo (the bench
-          workflow, which only needs the verdict) sets this false.
+          Only decide, and skip the builds. A caller whose own jobs wait for
+          the verdict (they cannot start until this workflow ends) calls it
+          twice: once like this, fast, and once, in a job that runs only on
+          release-only PRs, for the builds.
         type: boolean
-        default: true
+        default: false
       pixi-version:
         description: Pinned, because pixi rejects a lock written by another version.
         type: string
@@ -112,7 +125,7 @@ jobs:
   consumer-build:
     name: consumer build
     needs: classify
-    if: ${{ needs.classify.outputs.release_only == 'true' && inputs.consumer-build }}
+    if: ${{ needs.classify.outputs.release_only == 'true' && !inputs.classify-only }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -160,7 +173,7 @@ jobs:
   unit-tests:
     name: unit tests (stable / ubuntu-latest)
     needs: classify
-    if: ${{ needs.classify.outputs.release_only == 'true' && inputs.task != '' }}
+    if: ${{ needs.classify.outputs.release_only == 'true' && inputs.task != '' && !inputs.classify-only }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
