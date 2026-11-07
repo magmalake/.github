@@ -130,6 +130,54 @@ class Workflows(unittest.TestCase):
         self.assertFalse(classify(d)[0])
 
 
+def deletion(path: str, removed=("Fixed a bug.",)) -> str:
+    body = "".join(f"-{x}\n" for x in removed)
+    return (
+        f"diff --git a/{path} b/{path}\ndeleted file mode 100644\n"
+        f"index 1111111..0000000\n--- a/{path}\n+++ /dev/null\n"
+        f"@@ -1,{len(removed)} +0,0 @@\n{body}"
+    )
+
+
+class Fragments(unittest.TestCase):
+    def test_fragment_deletion(self):
+        for path in ["changes/fix-x.md", "tins/changes/fix-x.md", "a/b/changes/y.md"]:
+            with self.subTest(path):
+                self.assertTrue(classify(deletion(path))[0])
+
+    def test_deletion_with_changelog_and_version(self):
+        diff = (
+            deletion("changes/fix-x.md")
+            + file_diff("shelf.toml", ['version = "0.1.0"'], ['version = "0.2.0"'])
+            + file_diff("CHANGELOG.md", ["a"], ["b"])
+        )
+        self.assertTrue(classify(diff)[0])
+
+    def test_fragment_addition_is_not(self):
+        d = (
+            "diff --git a/changes/x.md b/changes/x.md\nnew file mode 100644\n"
+            "index 0000000..2222222\n--- /dev/null\n+++ b/changes/x.md\n"
+            "@@ -0,0 +1 @@\n+Added a thing.\n"
+        )
+        self.assertFalse(classify(d)[0])
+
+    def test_fragment_edit_is_not(self):
+        self.assertFalse(classify(file_diff("changes/x.md", ["a"], ["b"]))[0])
+
+    def test_other_deletions_are_not(self):
+        for path in ["src/x.mojo", "changes/x.txt", "docs/changes.md", "changes/sub/x.txt", "CHANGELOG.md"]:
+            with self.subTest(path):
+                self.assertFalse(classify(deletion(path))[0])
+
+    def test_fragment_deletion_plus_source_edit_is_not(self):
+        diff = deletion("changes/x.md") + file_diff("src/a.mojo", ["1"], ["2"])
+        self.assertFalse(classify(diff)[0])
+
+    def test_fragment_rename_is_not(self):
+        d = "diff --git a/changes/x.md b/src/x.mojo\nsimilarity index 100%\nrename from changes/x.md\nrename to src/x.mojo\n"
+        self.assertFalse(classify(d)[0])
+
+
 class OtherFiles(unittest.TestCase):
     def test_changelog_and_lock(self):
         d = file_diff("CHANGELOG.md", ["a"], ["b"]) + file_diff(

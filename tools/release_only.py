@@ -17,6 +17,9 @@ rules below do not recognise sends the PR to the full suite:
     dependency's `rev = "<hex>"`, provided that is the only thing the line's
     change touched.
   * `CHANGELOG.md`: anything.
+  * `changes/*.md` (also `<subdir>/changes/*.md`): changelog fragments, which
+    `shelf release apply` deletes in the release commit. Deleting one is
+    accepted; adding or editing one is not (that is a feature PR).
   * `pixi.lock` (any directory): anything. It is generated.
   * `.github/workflows/*.yml`: a 40-hex commit replaced by another on a line
     that is otherwise unchanged (sibling checkouts pinned by commit), and
@@ -53,6 +56,10 @@ RECIPE_VERSION = re.compile(
 REV = re.compile(r'\brev\s*=\s*"[0-9a-f]{7,40}"')
 HEX40 = re.compile(r'\b[0-9a-f]{40}\b')
 COMMENT = re.compile(r'^\s*#')
+
+# A changelog fragment: `changes/<name>.md` at the root or under a tin's subdirectory.
+FRAGMENT = re.compile(r"^(?:.+/)?changes/[^/]+\.md$")
+DELETED = re.compile(r"^deleted file mode \d+$")
 
 TOML_FILES = {"shelf.toml", "pixi.toml"}
 RECIPE_FILES = {"recipe.yaml", "recipe.yml", "meta.yaml"}
@@ -119,6 +126,9 @@ def why_not(f: FileDiff) -> str | None:
         return None  # generated; any content
     if f.old != f.new:
         return f"{f.old} renamed to {f.new}"
+    if FRAGMENT.match(f.new) and f.special and all(DELETED.match(x) for x in f.special):
+        if not f.added:
+            return None  # a consumed changelog fragment
     if f.special:
         return f"{f.new}: {f.special[0]}"
     if not f.removed and not f.added:
