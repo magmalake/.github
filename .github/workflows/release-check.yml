@@ -148,8 +148,10 @@ jobs:
           scratch=$(mktemp -d)
           cd "$scratch"
           # The lines orca's README gives a new project: Modular's channel,
-          # pixi's build preview, the compiler.
-          pixi init lake -c https://conda.modular.com/max -c conda-forge
+          # pixi's build preview, the compiler. The nightly channel carries
+          # the stable releases too, so one channel serves a tin pinned to
+          # either kind of compiler.
+          pixi init lake -c https://conda.modular.com/max-nightly -c conda-forge
           cd lake
           sed -i.bak 's/^\[workspace\]/[workspace]\npreview = ["pixi-build"]/' pixi.toml
           pixi add "mojo-compiler$COMPILER"
