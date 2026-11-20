@@ -16,8 +16,9 @@
 #             own CI runs for tests; leave out what needs secrets, a cluster,
 #             or a non-Mojo toolchain the tin's CI tests separately.
 #   needs     tins consumed by source path (`-I ../x/src`, CI checking the
-#             sibling out). Tins named in a pixi.toml git dependency are added
-#             automatically. A tin whose need failed is skipped, not run.
+#             sibling out). Tins named in a pixi.toml git dependency outside
+#             [feature.*] tables are added automatically. A tin whose need
+#             failed is skipped, not run.
 #   dev_only  true for tools every tin's lint or bench environment pulls in;
 #             their failure does not block the tins that use them (a real
 #             build break still shows up in those tins' own logs).

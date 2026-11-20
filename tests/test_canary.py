@@ -124,6 +124,8 @@ class PixiToml(unittest.TestCase):
         )
         # A package that happens to be called `git` is a conda spec, not a source.
         self.assertEqual(doc["feature"]["dev"]["dependencies"]["git"], ">=2")
+        # mozz is only in the fuzz feature, so it does not block json_mlake.
+        self.assertNotIn("mozz_mlake", rw.siblings)
 
     def test_encoder_max_core(self):
         doc = tomllib.loads(rewrite("encoder.pixi.toml", "encoder.mojo").text)

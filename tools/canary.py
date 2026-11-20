@@ -190,7 +190,7 @@ def _inline(table: dict) -> str:
 class Rewrite:
     text: str
     changes: list[str]
-    siblings: set[str]  # sibling dirs this file depends on
+    siblings: set[str]  # sibling dirs this file depends on outside [feature.*]
     old_pins: dict[str, set[str]]  # package -> versions it was pinned to
 
 
@@ -247,7 +247,11 @@ def rewrite_pixi_toml(
                 rel = os.path.relpath(dest, manifest_dir).replace(os.sep, "/")
                 kept = {k: v for k, v in tbl.items() if k not in GIT_KEYS}
                 new_value = _inline({"path": rel, **kept})
-                used.add(siblings[sib].name)
+                # A sibling only an optional feature uses (bench, examples,
+                # codecs) still has to build for the solve, but its failing
+                # tests do not block this tin's.
+                if not table.startswith("feature."):
+                    used.add(siblings[sib].name)
             elif key in pins and isinstance(tbl.get("version"), str):
                 new = repin(tbl["version"], pins[key])
                 if new is not None:
