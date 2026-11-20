@@ -1,0 +1,211 @@
+[workspace]
+name = "iceberg-mojo"
+version = "0.12.0"
+authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
+description = "Native pure-Mojo Apache Iceberg — table metadata, snapshots, partition transforms, expressions, manifests, scan planning, multi-core data reads including nested columns, and writes: append, delete, overwrite and deletion vectors."
+preview = ["pixi-build"]
+channels = [
+    "https://conda.modular.com/max-nightly",
+    "conda-forge",
+]
+platforms = ["osx-arm64", "linux-64"]
+
+# Sibling magmalake tins are consumed by *source path* (`-I ../x.mojo/src`,
+# collected in $ICEBERG_INCLUDES below) by the test, lint, cli and tool tasks:
+# mojolint needs real sources to resolve, and a change here can be tried
+# against a sibling's working tree. CI checks each sibling out next to this
+# repository. The package build (`[package]` below) takes the siblings as
+# built packages, compiled with the same pinned Mojo.
+#
+# threads.mojo is a source-path sibling too and needs nothing else: it calls
+# the pthread symbols libc already exports, with no shim and no build step.
+#
+# Four of the siblings are FFI tins whose C shims must be *installed* into the
+# environment even though their Mojo code comes from the checkout next door:
+# objectstore (libcurl), and zstd, lz4 and brotli — the Parquet page codecs
+# parquet.mojo reads and writes. Those are git source dependencies below — a
+# path dependency would break `pixi install` for a bare clone, because pixi
+# solves every environment even when it installs one.
+[dependencies]
+# One toolchain: the tin, its tests and every consumer use the same Mojo
+# nightly. A precompiled Mojo package (.mojoc) loads only in the compiler
+# version that built it, so the pin is exact here and in [package] below, and
+# it moves across all magmalake tins together. `mojo` rather than
+# `mojo-compiler` because `fmt` and `format-check` need the `mojo format` that
+# only the bigger package ships.
+mojo = "==1.3.0.dev2026111805"
+objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "4671e036421dc70081cdf4c3859b726dea75ecea" }
+zstd-mojo = { git = "https://github.com/magmalake/zstd.mojo", rev = "f0206c289c455ea7b60169f19709e28d52a5f850" }
+lz4-mojo = { git = "https://github.com/magmalake/lz4.mojo", rev = "c31dcbc1f58db966f29cc11aad1fc276b3d31b9b" }
+brotli-mojo = { git = "https://github.com/magmalake/brotli.mojo", rev = "e2ad69eaefd932ffce0aa918437d91708c190f4b" }
+libcurl = ">=8,<9"
+# sqlite.mojo (the SQL catalog's backing store) the same way: a git dependency
+# purely so pixi installs its transitive C lib, while ICEBERG_INCLUDES below
+# points the compiler at the source checkout instead of the built .mojopkg.
+# Pinned to a pushed rev past 0.3.1, the first with `Database.changes()` —
+# the row count the catalog's guarded UPDATE reads. The rev matters here and
+# not only in the source checkout because `sqlite` can resolve to this
+# package's installed .mojopkg rather than to the `-I ../sqlite.mojo` checkout.
+sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "d66ef8c443be02a64a9acbb8501ceba48ea7258b" }
+libsqlite = ">=3.45,<4"
+sqlite = ">=3.45,<4"
+# postgres.mojo, the SQL catalog's other backend, on the same terms: the git
+# dependency is what installs libpq's dependency closure, while
+# ICEBERG_INCLUDES points the compiler at ../postgres.mojo/src.
+postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "54ab11c1c9a33fb252cd23fd78a418ba5df5bfe9" }
+libpq = ">=16,<19"
+# The full server (initdb, pg_ctl, pg_isready, createdb) is only used by the
+# tests and the Postgres parity gate: scripts/pg-server.sh starts a throwaway
+# cluster on a free port, so no Docker and no service container. psycopg is
+# there for anything that wants to talk to it from Python without the
+# PyIceberg venv.
+postgresql = ">=16,<19"
+psycopg = ">=3.2"
+# The REST-catalog mock server and the fixture/oracle tooling.
+python = ">=3.10,<3.14"
+# MinIO for the S3/MinIO end-to-end scans, as a package rather than a
+# download. CI used to curl the binary from dl.min.io, which now answers 410
+# for every platform and every release: the open-source server is archived
+# and the files are gone for good. The fetch step was `continue-on-error`, so
+# nothing failed — the S3 tests just started skipping, silently, on both
+# runners.
+#
+# conda-forge carries `RELEASE.2025-10-15T17-29-55Z`, the last community
+# release and the one these tests were written against, for linux-64 and
+# osx-arm64. It lands as `minio` on PATH, which is already what
+# tests/run_tests.sh looks for after $MINIO_BINARY and build/minio.
+#
+# It will not receive updates, which is acceptable for a fixture that binds
+# 127.0.0.1 with well-known test credentials and holds only throwaway
+# fixtures. Having no SigV4-verifying server at all is not — and that is
+# where CI had drifted.
+minio-server = ">=2025.10.15"
+
+# Added by `pixi shelf add lint-mojo`: the linter comes from GitHub as a pixi
+# source dependency pinned at the revision mojoshelf published, and builds
+# the `mojolint` executable into every environment next to mojo-lsp-server.
+lint-mojo = { git = "https://github.com/magmalake/lint.mojo.git", rev = "26bf6963124769c4a42251e911f0fc41e537f0d0" }
+
+# parquet-mojo 0.9.x keeps the Arrow layer in arrow-mlake-mojo, and threads-mojo
+# keeps whatever toolchains spell differently in a compat directory picked by
+# the include path (`../threads.mojo/compat`).
+#
+# sqlite.mojo's package directory is `sqlite/` at its repo root, not `src/`;
+# postgres.mojo's is `src/postgres`, so it takes the usual `/src`.
+[activation.env]
+ICEBERG_INCLUDES = "-I src -I ../threads.mojo/src -I ../threads.mojo/compat -I ../hashes.mojo/src -I ../deflate.mojo/src -I ../avro.mojo/src -I ../thrift.mojo/src -I ../snappy.mojo/src -I ../parquet.mojo/src -I ../parquet.mojo/full/src -I ../arrow-mlake.mojo/src -I ../memory-region.mojo/src -I ../roaring.mojo/src -I ../objectstore.mojo/src -I ../zstd.mojo/src -I ../lz4.mojo/src -I ../brotli.mojo/src -I ../sqlite.mojo -I ../postgres.mojo/src"
+
+[tasks]
+# Builds the test binary, brings up the REST mock (and MinIO and a throwaway
+# PostgreSQL cluster when available), runs everything, tears them down. See
+# tests/run_tests.sh.
+test = { cmd = "bash tests/run_tests.sh" }
+# mojolint (lint-mojo, below): the origin and threading mistakes the compiler
+# lets through, with mojo-lsp-server behind the rules. Exit 1 on findings.
+# tools/ is left out: tools/make_fixtures.mojo also imports iceberg_rs from
+# ../iceberg-rs.mojo/src, a sibling CI does not check out for this repo.
+lint = { cmd = "mojolint --lsp $ICEBERG_INCLUDES src tests bench" }
+# CI runs `check`: the tests plus a build of the CLI, so a broken CLI fails too.
+check = { depends-on = ["test", "cli", "lint"] }
+build-test = { cmd = "mkdir -p build && mojo build tests/iceberg_test.mojo $ICEBERG_INCLUDES -o build/iceberg-test" }
+cli = { cmd = "mkdir -p build && mojo build src/main.mojo $ICEBERG_INCLUDES -o build/iceberg-mojo" }
+bench = { cmd = "bash bench/run_bench.sh" }
+# Snapshot expiry and commit cost on a long hourly history (5,000 snapshots,
+# kept to 168): `pixi run bench-expiry [<dir> <snapshots>]`.
+bench-expiry = { cmd = "mkdir -p build && mojo build bench/bench_expiry.mojo $ICEBERG_INCLUDES -o build/bench-expiry && rm -rf build/bench-expiry-wh && ./build/bench-expiry build/bench-expiry-wh 5000 --keep 168" }
+# Per-stage profile of a full scan: where the milliseconds actually go.
+profile = { cmd = "mkdir -p build && mojo build bench/profile_scan.mojo $ICEBERG_INCLUDES -o build/iceberg-profile && ICEBERG_BENCH_ROOT=${ICEBERG_BENCH_ROOT:-build/bench-warehouse} ./build/iceberg-profile" }
+# The Arrow C Data Interface, from a nested scan into pyarrow. macOS wants
+# .dylib and Linux .so; the shared-library task reads $SHLIB_EXT.
+carrow-lib = { cmd = "mkdir -p build && mojo build --emit shared-lib tools/carrow_scan.mojo $ICEBERG_INCLUDES -o build/libibcarrow$SHLIB_EXT" }
+# The same interface a batch at a time, over one scan split: the local
+# counterpart of the Flight server's DoGet, for a consumer in this process.
+# See tools/carrow_stream_scan.mojo.
+# The producer half of a cross-process Arrow handover: publishes a split's
+# buffers into a shared mapping and prints where they landed. See
+# tools/shm_publish.mojo.
+shm-publish = { cmd = "mkdir -p build && mojo build tools/shm_publish.mojo -I tools $ICEBERG_INCLUDES -o build/ib-shm-publish" }
+# The consumer half, in Mojo: maps what the publisher points at and folds it
+# without a copy. See tools/shm_consume.mojo.
+shm-consume = { cmd = "mkdir -p build && mojo build tools/shm_consume.mojo -I tools $ICEBERG_INCLUDES -o build/ib-shm-consume" }
+carrow-scan-lib = { cmd = "mkdir -p build && mojo build --emit shared-lib tools/carrow_stream_scan.mojo $ICEBERG_INCLUDES -o build/libibscan$SHLIB_EXT" }
+# Writes ten tables with this library and has PyIceberg and DuckDB read them
+# back — then lets PyIceberg append to two of them and reads the result here.
+# Needs `uv`, which builds the venv; CI runs it as a fifth job.
+verify-writes = { cmd = "bash tools/verify_writes.sh" }
+# The SQL catalog's parity gate, both directions against PyIceberg's own
+# `SqlCatalog` over the same sqlite file. See tools/verify_sql_catalog.py.
+verify-sql-catalog = { cmd = "bash tools/verify_sql_catalog.sh" }
+# The same gate over PostgreSQL, against PyIceberg's
+# `SqlCatalog("postgresql+psycopg://…")` — same two catalog tables, same rows,
+# read back cell-exact both ways. Runs under a throwaway server.
+verify-pg-catalog = { cmd = "sh scripts/with-pg-server.sh bash tools/verify_pg_catalog.sh" }
+fmt = { cmd = "mojo format src tests bench tools" }
+# `mojo format` has no check mode — it rejects `--check`, and there is
+# none among the hidden options either — so the check is: format, then assert the
+# tree did not move. It rewrites the files as a side effect, which is what CI
+# wants and is harmless locally; run it with your own work committed or stashed.
+format-check = { cmd = "mojo format src tests bench tools && git diff --exit-code -- src tests bench tools" }
+
+[target.osx-arm64.activation.env]
+SHLIB_EXT = ".dylib"
+
+[target.linux-64.activation.env]
+SHLIB_EXT = ".so"
+
+# ── pixi-build: consumable as a pixi source dependency ──────────────────────
+# Conda package name is iceberg-mojo; the Mojo import stays `from iceberg import …`.
+[package]
+name = "iceberg-mojo"
+version = "0.12.0"
+
+[package.build]
+backend = { name = "pixi-build-mojo", version = "0.*" }
+
+[package.build.config.pkg]
+path = "src/iceberg"
+name = "iceberg"
+# Sibling tins arrive as .mojopkg in the host prefix; pixi-build-mojo does not
+# add them to the import path on its own.
+extra-args = ["-I", "$PREFIX/lib/mojo"]
+
+# hashes.mojo comes in by git, pinned to a commit, rather than by path: a
+# published package has to be self-contained, and pixi has no equivalent of
+# Cargo's path-plus-version fallback, so a `../hashes.mojo` here would only
+# ever resolve in this checkout.
+[package.host-dependencies]
+mojo-compiler = "==1.3.0.dev2026111805"
+deflate-mojo = { git = "https://github.com/magmalake/deflate.mojo", rev = "eac551eae60ab22d171b63845914186e639f3be3" }
+avro-mojo = { git = "https://github.com/magmalake/avro.mojo", rev = "e9e9e9e548782136ff0b664754d7e4d468c33ca8" }
+hashes-mojo = { git = "https://github.com/magmalake/hashes.mojo", rev = "452f8b2d506d421b5ef4a10db7ab2097a2d0d0dc" }
+lz4-mojo = { git = "https://github.com/magmalake/lz4.mojo", rev = "c31dcbc1f58db966f29cc11aad1fc276b3d31b9b" }
+objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "4671e036421dc70081cdf4c3859b726dea75ecea" }
+arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "472380b5d329230b8280d6b70ff70f7211f52538" }
+# iceberg reads and writes ZSTD, so it wants the full codec set. This is the
+# tin in parquet.mojo's full/ subdirectory; it pulls parquet-mojo with it.
+parquet-full-mojo = { git = "https://github.com/magmalake/parquet.mojo", rev = "c74aa76a58150233e5d6629572b6709a8383eaf7", subdirectory = "full" }
+postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "54ab11c1c9a33fb252cd23fd78a418ba5df5bfe9" }
+roaring-mojo = { git = "https://github.com/magmalake/roaring.mojo", rev = "aec9b768aa3b570d33dc39c77e863826eaaf5c5b" }
+threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "820a7c6e8619d49e13f944dfba73328236eb4903" }
+thrift-mojo = { git = "https://github.com/magmalake/thrift.mojo", rev = "388ef14690ec0bdd399b912a566047e8f8595c23" }
+sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "d66ef8c443be02a64a9acbb8501ceba48ea7258b" }
+
+[package.build-dependencies]
+mojo-compiler = "==1.3.0.dev2026111805"
+
+[package.run-dependencies]
+mojo-compiler = "==1.3.0.dev2026111805"
+deflate-mojo = { git = "https://github.com/magmalake/deflate.mojo", rev = "eac551eae60ab22d171b63845914186e639f3be3" }
+avro-mojo = { git = "https://github.com/magmalake/avro.mojo", rev = "e9e9e9e548782136ff0b664754d7e4d468c33ca8" }
+hashes-mojo = { git = "https://github.com/magmalake/hashes.mojo", rev = "452f8b2d506d421b5ef4a10db7ab2097a2d0d0dc" }
+lz4-mojo = { git = "https://github.com/magmalake/lz4.mojo", rev = "c31dcbc1f58db966f29cc11aad1fc276b3d31b9b" }
+objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "4671e036421dc70081cdf4c3859b726dea75ecea" }
+arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "472380b5d329230b8280d6b70ff70f7211f52538" }
+# iceberg reads and writes ZSTD, so it wants the full codec set. This is the
+# tin in parquet.mojo's full/ subdirectory; it pulls parquet-mojo with it.
+parquet-full-mojo = { git = "https://github.com/magmalake/parquet.mojo", rev = "c74aa76a58150233e5d6629572b6709a8383eaf7", subdirectory = "full" }
+postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "54ab11c1c9a33fb252cd23fd78a418ba5df5bfe9" }
+roaring-mojo = { git = "https://github.com/magmalake/roaring.mojo", rev = "aec9b768aa3b570d33dc39c77e863826eaaf5c5b" }
+threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "820a7c6e8619d49e13f944dfba73328236eb4903" }
+thrift-mojo = { git = "https://github.com/magmalake/thrift.mojo", rev = "388ef14690ec0bdd399b912a566047e8f8595c23" }
+sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "d66ef8c443be02a64a9acbb8501ceba48ea7258b" }

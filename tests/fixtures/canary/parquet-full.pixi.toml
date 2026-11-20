@@ -1,0 +1,57 @@
+# parquet-full-mojo: the codecs that need FFI, as a tin of their own.
+#
+# A second package in the same repository, published from this directory. The
+# root tin — parquet-mojo — reads and writes Parquet with UNCOMPRESSED, SNAPPY
+# and GZIP and links no third-party C at all; this one adds ZSTD, BROTLI,
+# LZ4_RAW and the legacy Hadoop-framed LZ4, which means libzstd, libbrotli and
+# liblz4 and the three cmake shims that dlopen them.
+#
+# Consumers pick: `pixi shelf add parquet-mojo` for the minimal reader,
+# `pixi shelf add parquet-full-mojo` for every codec the spec defines. Nothing
+# else about the split is visible — `from parquet import ParquetReader` is the
+# same import either way.
+#
+# There is no [workspace] here on purpose: this manifest is a package inside
+# the repo's workspace, the same shape zstd.mojo/shim uses.
+[package]
+name = "parquet-full-mojo"
+version = "0.1.12"
+
+[package.build]
+backend = { name = "pixi-build-mojo", version = "0.*" }
+
+[package.build.config.pkg]
+# Relative to THIS directory — a subdirectory manifest's build context is the
+# subdirectory, so this is full/src/parquet_full.
+path = "src/parquet_full"
+name = "parquet_full"
+# The sibling tins arrive as .mojopkg in the host prefix; pixi-build-mojo does
+# not add them to the import path on its own.
+extra-args = ["-I", "$PREFIX/lib/mojo"]
+
+[package.host-dependencies]
+mojo-compiler = "==1.3.0.dev2026111805"
+# The root package of this same repository, at the commit being built. A path
+# inside the repo resolves for every consumer, and the two tins never need
+# re-pinning against each other.
+parquet-mojo = { path = ".." }
+# Imported directly by src/parquet_full: every sibling a package uses has to be
+# declared, not inherited through parquet-mojo.
+snappy-mojo = { git = "https://github.com/magmalake/snappy.mojo", rev = "00450d1e1beada529c622f9ea9495957c90c467b" }
+thrift-mojo = { git = "https://github.com/magmalake/thrift.mojo", rev = "388ef14690ec0bdd399b912a566047e8f8595c23" }
+# The reason this tin exists: three dlopen'd C libraries.
+zstd-mojo = { git = "https://github.com/magmalake/zstd.mojo", rev = "f0206c289c455ea7b60169f19709e28d52a5f850" }
+lz4-mojo = { git = "https://github.com/magmalake/lz4.mojo", rev = "c31dcbc1f58db966f29cc11aad1fc276b3d31b9b" }
+brotli-mojo = { git = "https://github.com/magmalake/brotli.mojo", rev = "e2ad69eaefd932ffce0aa918437d91708c190f4b" }
+
+[package.build-dependencies]
+mojo-compiler = "==1.3.0.dev2026111805"
+
+[package.run-dependencies]
+mojo-compiler = "==1.3.0.dev2026111805"
+parquet-mojo = { path = ".." }
+snappy-mojo = { git = "https://github.com/magmalake/snappy.mojo", rev = "00450d1e1beada529c622f9ea9495957c90c467b" }
+thrift-mojo = { git = "https://github.com/magmalake/thrift.mojo", rev = "388ef14690ec0bdd399b912a566047e8f8595c23" }
+zstd-mojo = { git = "https://github.com/magmalake/zstd.mojo", rev = "f0206c289c455ea7b60169f19709e28d52a5f850" }
+lz4-mojo = { git = "https://github.com/magmalake/lz4.mojo", rev = "c31dcbc1f58db966f29cc11aad1fc276b3d31b9b" }
+brotli-mojo = { git = "https://github.com/magmalake/brotli.mojo", rev = "e2ad69eaefd932ffce0aa918437d91708c190f4b" }
