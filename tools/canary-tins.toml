@@ -278,15 +278,12 @@ checks = [
 ]
 
 # ── Apps: dista, morca and the census ───────────────────────────────────────
-# Their ports to the shared pin are still draft PRs, so each is tested at its
-# port branch. When the PR merges, delete the `ref` line (and this sentence of
-# the note): main is then the port.
+# On the shared pin on main since dista#144, morca#550 and census#222 merged.
+# A tin can still be tested at another branch with `ref = "<branch>"`.
 
 [[tin]]
 dir = "dista.mojo"
 repo = "morca-dev/dista"
-ref = "mojo-1.3-nightly"
-note = "at the port branch of morca-dev/dista#144 (draft); drop `ref` when it merges"
 job = "apps"
 # CI's `test`, `data` and `fuzz` jobs; its `kind` job needs a cluster.
 checks = [
@@ -305,8 +302,6 @@ needs = [
 [[tin]]
 dir = "morca"
 repo = "morca-dev/morca"
-ref = "mojo-1.3-nightly"
-note = "at the port branch of morca-dev/morca#550 (draft); drop `ref` when it merges"
 # CI's three `test` shards and `fuzz` in one job, its three `data` groups and
 # `rust-worker` in another: ~95 minutes in all with CI's caches, more cold.
 # All of it starts its own PostgreSQL and MinIO from conda-forge. The Rust
@@ -344,8 +339,6 @@ timeout = 60
 # The GH Archive census (the gharchive.example worktree is this repository).
 dir = "census"
 repo = "morca-dev/census"
-ref = "mojo-1.3-nightly"
-note = "at the port branch of morca-dev/census#222 (draft); drop `ref` when it merges"
 job = "apps"
 # CI's `test` job. Left out: the image jobs (docker, and a push to GHCR off
 # main), customs, the morca.dev.toml grep (no Mojo), and test-daily (three

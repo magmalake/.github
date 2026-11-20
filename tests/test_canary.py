@@ -277,12 +277,11 @@ class TinsFile(unittest.TestCase):
         # The default branch unless the file names one.
         self.assertEqual(tins["iceberg.mojo"].ref, "")
         self.assertEqual(tins["iceberg.mojo"].jobs, ["libraries"])
-        # The three draft ports: at their branch, with a note that says so.
+        # The three apps: at their default branch, like every other tin.
         for d, repo in [("dista.mojo", "morca-dev/dista"), ("morca", "morca-dev/morca"),
                         ("census", "morca-dev/census")]:
             self.assertEqual(tins[d].repo, repo)
-            self.assertEqual(tins[d].ref, "mojo-1.3-nightly")
-            self.assertIn("drop `ref`", tins[d].note)
+            self.assertEqual(tins[d].ref, "")
         # A check's job overrides its tin's.
         self.assertEqual(tins["morca"].jobs, ["morca", "morca-data"])
         self.assertTrue(tins["duckdb.extension"].submodules)
