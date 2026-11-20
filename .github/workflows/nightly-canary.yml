@@ -40,6 +40,7 @@ on:
       - tools/canary.py
       - tools/canary-tins.toml
       - tools/dlopen.py
+      - tools/flaky-retry.sh
       - .github/workflows/nightly-canary.yml
 
 permissions:

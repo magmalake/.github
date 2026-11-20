@@ -77,10 +77,14 @@ FLAKY = re.compile(r"isContiguousAccess|properlyDominates")
 SDK_BREAK = re.compile(r"libSystem\.tbd.*unknown architecture")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 ERROR_LINE = re.compile(
-    r"(error|Error|ERROR|FAIL|panicked|Traceback|Segmentation fault|"
-    r"Assertion|undefined symbol|Undefined symbols|failed to|"
-    r"stack dump|timed out)"
+    r"(\berror\b:|^error\b|\bFAIL(ED)?\b|\w+Error: |panicked|Segmentation fault|"
+    r"Assertion|undefined symbol|Undefined symbols|failed to|\u00d7 |timed out)"
 )
+# Lines that look like errors and are not: test names, the task echo, the
+# crash reporter's own chatter.
+NOT_ERROR = re.compile(r"^\s*(PASS\b|ok:|\u2728 Pixi task|\$ |\[\d+:\d+:\d+)")
+CRASH = re.compile(r"Please submit a bug report to https://github\.com/modular|^Stack dump:", re.M)
+CRASH_ARGS = re.compile(r"^\d+\.\s+Program arguments: (?P<args>.*)$", re.M)
 
 
 # ── pins ────────────────────────────────────────────────────────────────────
@@ -579,7 +583,16 @@ def run_step(cmd: str, cwd: pathlib.Path, env: dict, timeout_s: int, log_path: p
 def first_errors(output: str, n: int = 6) -> list[str]:
     lines = [ANSI.sub("", ln).rstrip() for ln in output.splitlines()]
     lines = [ln for ln in lines if ln.strip()]
-    hits = [ln.strip() for ln in lines if ERROR_LINE.search(ln)]
+    hits = [ln.strip() for ln in lines if ERROR_LINE.search(ln) and not NOT_ERROR.match(ln)]
+    if CRASH.search(output):
+        what = "compiler crash"
+        m = CRASH_ARGS.search(ANSI.sub("", output))
+        if m:
+            args = m.group("args").split()
+            what += ": mojo " + " ".join(a for a in args[1:] if not a.startswith("/"))[:160]
+        if FLAKY.search(output):
+            what += " (the flaky isContiguousAccess crash)"
+        hits.insert(0, what)
     return (hits or lines[-n:])[:n]
 
 
@@ -613,6 +626,9 @@ def run_tin(tin, work, out, env, args, log) -> Result:
             attempts += 1
             code, output = run_step(check.run, root, env, tin.timeout * 60, log_path)
             if code == 0:
+                res.retries += [
+                    f"{check.name}: {m}" for m in re.findall(r"^canary: flaky-retry: (.*)$", output, re.M)
+                ]
                 break
             if args.macos_sdk and SDK_BREAK.search(output) and sdk_fixes < 10:
                 patched = patch_sdk(root, args.macos_sdk)

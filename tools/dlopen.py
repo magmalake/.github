@@ -10,6 +10,7 @@ library's real consumers.
 """
 
 import ctypes
+import os
 import sys
 
 
@@ -20,7 +21,7 @@ def main(paths: list[str]) -> int:
     bad = 0
     for path in paths:
         try:
-            ctypes.CDLL(path, mode=ctypes.RTLD_NOW)
+            ctypes.CDLL(path, mode=os.RTLD_NOW)
             print(f"loaded {path}")
         except OSError as e:
             print(f"error: dlopen {path}: {e}")

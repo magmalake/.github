@@ -115,7 +115,12 @@ checks = [
 dir = "json_mlake"
 checks = [
     { name = "package", run = "pixi exec rattler-build build --recipe recipe.yaml --output-dir build/canary-pkg -c \"$CANARY_CHANNEL\" -c conda-forge" },
-    "pixi run tests-cpu",
+    # tests-cpu is ~35 compiles in one task; each runs on its own, so the
+    # flaky compiler crash is retried per compile, not per task.
+    { name = "tests-cpu", run = """
+files=$(python3 -c "import tomllib; print(tomllib.load(open('pixi.toml', 'rb'))['tasks']['tests-cpu'])" | grep -oE '[^ ]+\\.mojo')
+for f in $files; do pixi run "$CANARY_TOOLS/flaky-retry.sh" mojo -I . "$f"; done
+""" },
 ]
 
 [[tin]]
@@ -149,30 +154,31 @@ needs = [
 
 [[tin]]
 dir = "flare_mlake"
-# The commands of CI's `tests` job. flare compiles against threads.mojo from
-# source.
+# The commands of CI's `tests` job, each through flaky-retry.sh. flare
+# compiles against threads.mojo from source.
 checks = [
     { name = "tests", run = """
 T="-I ../threads.mojo/src -I ../threads.mojo/compat"
-pixi run mojo -I . $T tests/test_dylib.mojo
-pixi run mojo -I . $T tests/http/test_client_read_timeout.mojo
-pixi run mojo -I . $T tests/http/test_server_ws_upgrade.mojo
-pixi run mojo -I . $T tests/http/test_server_ws_offload.mojo
-pixi run mojo -I . $T tests/ws/test_ws.mojo
-pixi run mojo -I . $T tests/grpc/test_grpc.mojo
-pixi run mojo -I . $T tests/grpc/test_metadata.mojo
-pixi run mojo -I . $T tests/grpc/test_grpc_client.mojo
-pixi run mojo -I . $T tests/grpc/test_grpc_server_stream.mojo
-pixi run mojo -I . $T tests/grpc/test_grpc_compression.mojo
-pixi run mojo -I . $T tests/http/test_http.mojo
-pixi run mojo -I . $T tests/http2/test_h2_frame.mojo
-pixi run mojo -I . $T tests/http2/test_h2_hpack.mojo
-pixi run mojo -I . $T tests/tls/test_tls.mojo
-pixi run mojo -I . $T tests/net/test_net.mojo
-pixi run mojo -I . $T tests/net/test_fcntl_decl.mojo
-pixi run mojo -I . $T tests/net/test_libc_abi.mojo
-pixi run mojo -I . $T tests/crypto/test_base64.mojo
-pixi run mojo -I . $T tests/crypto/test_hmac.mojo
+R="$CANARY_TOOLS/flaky-retry.sh"
+pixi run $R mojo -I . $T tests/test_dylib.mojo
+pixi run $R mojo -I . $T tests/http/test_client_read_timeout.mojo
+pixi run $R mojo -I . $T tests/http/test_server_ws_upgrade.mojo
+pixi run $R mojo -I . $T tests/http/test_server_ws_offload.mojo
+pixi run $R mojo -I . $T tests/ws/test_ws.mojo
+pixi run $R mojo -I . $T tests/grpc/test_grpc.mojo
+pixi run $R mojo -I . $T tests/grpc/test_metadata.mojo
+pixi run $R mojo -I . $T tests/grpc/test_grpc_client.mojo
+pixi run $R mojo -I . $T tests/grpc/test_grpc_server_stream.mojo
+pixi run $R mojo -I . $T tests/grpc/test_grpc_compression.mojo
+pixi run $R mojo -I . $T tests/http/test_http.mojo
+pixi run $R mojo -I . $T tests/http2/test_h2_frame.mojo
+pixi run $R mojo -I . $T tests/http2/test_h2_hpack.mojo
+pixi run $R mojo -I . $T tests/tls/test_tls.mojo
+pixi run $R mojo -I . $T tests/net/test_net.mojo
+pixi run $R mojo -I . $T tests/net/test_fcntl_decl.mojo
+pixi run $R mojo -I . $T tests/net/test_libc_abi.mojo
+pixi run $R mojo -I . $T tests/crypto/test_base64.mojo
+pixi run $R mojo -I . $T tests/crypto/test_hmac.mojo
 """ },
 ]
 needs = ["threads.mojo"]
