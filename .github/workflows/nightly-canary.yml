@@ -63,7 +63,7 @@ concurrency:
 
 jobs:
   canary:
-    name: ${{ matrix.job }} on the newest nightly
+    name: ${{ matrix.job }}
     runs-on: ubuntu-latest
     # The libraries take about 45 minutes on ubuntu-latest and ~15 GB of disk;
     # morca's two jobs are the longest. The timeout leaves room for a slow day.

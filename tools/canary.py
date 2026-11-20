@@ -834,7 +834,8 @@ def summary_md(meta: dict, results: list[Result]) -> str:
         lines.append(
             f"| {r.tin} | {_tested_at(r)} | {icon.get(r.result, r.result)} | {dur} | {detail} |"
         )
-    lines += ["", "Logs and canary-results.json are in the run's `canary` artifact."]
+    art = f"canary-{meta['job']}" if meta.get("job") else "canary"
+    lines += ["", f"Logs and canary-results.json are in the run's `{art}` artifact."]
     return "\n".join(lines) + "\n"
 
 

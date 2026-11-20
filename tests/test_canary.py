@@ -4,7 +4,7 @@ The manifests under fixtures/canary/ are real files from the tins' main
 branches on 2026-11-20: iceberg.mojo (sibling git dependencies, a
 `subdirectory`, comments everywhere), parquet.mojo/full, json_mlake (MAX pins
 in run-constraints and an extra), encoder.mojo (max-core), mozz_mlake (a
-non-sibling git dependency), maws (still on 1.2.0, with a range pin), and the
+non-sibling git dependency), maws (its manifest from before its port, on 1.2.0 with a range pin), and the
 three rattler-build recipes.
 """
 
@@ -287,9 +287,10 @@ class TinsFile(unittest.TestCase):
         self.assertEqual(tins["morca"].jobs, ["morca", "morca-data"])
         self.assertTrue(tins["duckdb.extension"].submodules)
         self.assertFalse(tins["threads.example"].enabled)
-        # Left as they were (another port is under way).
-        for d in ["xml.mojo", "sigv4.mojo", "maws", "restate.mojo", "requests"]:
-            self.assertFalse(tins[d].enabled, d)
+        for d in ["xml.mojo", "sigv4.mojo", "maws", "restate.mojo"]:
+            self.assertTrue(tins[d].enabled, d)
+        self.assertEqual(tins["maws"].needs, ["sigv4.mojo", "xml.mojo"])
+        self.assertFalse(tins["requests"].enabled)
 
     def test_the_workflow_runs_every_job(self):
         jobs = {j for t in canary.load_tins(HERE.parent / "tools" / "canary-tins.toml") for j in t.jobs}

@@ -239,6 +239,44 @@ needs = [
 ]
 timeout = 60
 
+# ── Ported after the canary started ─────────────────────────────────────────
+
+[[tin]]
+dir = "xml.mojo"
+checks = ["pixi run check"]
+
+[[tin]]
+dir = "sigv4.mojo"
+checks = ["pixi run check"]
+
+[[tin]]
+dir = "maws"
+# CI's `check` (tests + the CLI), the CLI smoke, and the release tarball
+# unpacked and run outside pixi. Not run: install.sh against a local server
+# and the py_reference pytest (no Mojo). sigv4 and xml by source path.
+checks = [
+    "pixi run check",
+    { name = "cli smoke", run = "pixi run ./build/maws --version" },
+    { name = "dist", run = """
+pixi run dist
+rm -rf build/canary-unpack && mkdir -p build/canary-unpack
+tar -C build/canary-unpack -xzf build/dist/maws-*.tar.gz
+env -i HOME="$HOME" PATH=/usr/bin:/bin build/canary-unpack/maws-*/bin/maws --version
+""" },
+]
+needs = ["sigv4.mojo", "xml.mojo"]
+
+[[tin]]
+dir = "restate.mojo"
+# CI's three steps. The Rust shim is a pixi source dependency built with the
+# runner's cargo; `it` and `it-served` boot a throwaway restate-server through
+# npx (Node on the runner), on the ports CI uses.
+checks = [
+    "pixi run build-example",
+    { name = "it", run = "RESTATE_IT_INGRESS=18080 RESTATE_IT_ADMIN=19070 RESTATE_IT_NODE=15122 RESTATE_IT_ENDPOINT=19080 pixi run it" },
+    { name = "it-served", run = "RESTATE_IT_INGRESS=28080 RESTATE_IT_ADMIN=29070 RESTATE_IT_NODE=25122 RESTATE_IT_ENDPOINT=29080 pixi run it-served" },
+]
+
 # ── Apps: dista, morca and the census ───────────────────────────────────────
 # Their ports to the shared pin are still draft PRs, so each is tested at its
 # port branch. When the PR merges, delete the `ref` line (and this sentence of
@@ -379,33 +417,6 @@ enabled = false
 note = "frozen at mojo ==1.0.0 on purpose: the companion code of the Mojo 1.0 threads post"
 
 # ── Not on the shared nightly pin yet ───────────────────────────────────────
-# These still pin Mojo 1.2.0 (or float), so a run against the nightly says
-# nothing about the nightly. Enable each once it moves to the one-toolchain pin.
-
-[[tin]]
-dir = "xml.mojo"
-checks = ["pixi run check"]
-enabled = false
-note = "still on mojo-compiler ==1.2.0"
-
-[[tin]]
-dir = "sigv4.mojo"
-checks = ["pixi run check"]
-enabled = false
-note = "still on mojo-compiler ==1.2.0"
-
-[[tin]]
-dir = "maws"
-checks = ["pixi run check"]
-needs = ["sigv4.mojo", "xml.mojo"]
-enabled = false
-note = "still on mojo-compiler ==1.2.0"
-
-[[tin]]
-dir = "restate.mojo"
-checks = ["pixi run build-example"]
-enabled = false
-note = "still on mojo-compiler ==1.2.0"
 
 [[tin]]
 dir = "requests"
