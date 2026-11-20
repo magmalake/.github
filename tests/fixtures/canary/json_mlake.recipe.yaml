@@ -1,0 +1,103 @@
+# rattler-build recipe for json
+# Ships json as a precompiled `json.mojoc` under $PREFIX/lib/mojo/, plus the
+# simdjson FFI shared object. Consumers' Mojo loads the .mojoc instead of
+# parsing the source tree on every build (census #153: flare and json from
+# source were 43% of a no-change census rebuild's frontend).
+#
+# A .mojoc only loads in the compiler version that built it, so the build
+# pins `mojo-compiler` exactly. Every other magmalake tin already does this
+# and moves in lockstep with Mojo releases; json now moves with them.
+#
+# `json.gpu` is left out of the .mojoc: it imports `max`, and a .mojoc
+# resolves every import when it loads, so including it would make max-core a
+# requirement of `import json`. GPU users build json from source.
+
+context:
+  name: json_mlake
+  # Must equal shelf.toml and pixi.toml; .github/check-versions.py fails CI
+  # otherwise (`shelf release` bumps only those two).
+  version: "0.5.1"
+
+package:
+  name: ${{ name }}
+  version: ${{ version }}
+
+source:
+  path: .
+
+build:
+  script:
+    - mkdir -p $PREFIX/lib/mojo
+    # ── json.mojoc, without json/gpu (see the header) ────────────────────
+    - mkdir -p _stage
+    - cp -r json _stage/
+    - rm -rf _stage/json/gpu
+    - mojo precompile _stage/json -o $PREFIX/lib/mojo/json.mojoc
+    # ── simdjson FFI wrapper (loaded at runtime by json) ─────────────────
+    - mkdir -p $PREFIX/lib
+    # ``-include iterator``: simdjson.h uses ``std::inserter`` without including
+    # <iterator>. Older standard libraries pulled it in transitively; current
+    # libc++ does not, so the header fails to compile on its own (macOS:
+    # "no member named 'inserter' in namespace 'std'").
+    - $CXX -O3 -std=c++17 -fPIC -DNDEBUG -shared -include iterator
+        -o $PREFIX/lib/libsimdjson_wrapper.so
+        json/cpu/simdjson_ffi/simdjson_wrapper.cpp
+        -I$PREFIX/include
+        -L$PREFIX/lib
+        -lsimdjson
+
+requirements:
+  build:
+    - ${{ compiler('cxx') }}
+    - mojo-compiler ==1.3.0.dev2026111805
+  host:
+    - simdjson >=4.2.4,<5
+  run:
+    - mojo-compiler ==1.3.0.dev2026111805
+    - simdjson >=4.2.4,<5
+  # Not a dependency. `json/gpu/` imports `max.gpu`, which ships in
+  # `max-core`, but nothing on the CPU import graph names `json.gpu`,
+  # so a consumer who never uses the GPU path never needs the package.
+  # Listing it under `run` would install it for everyone, and it is
+  # governed by the Modular Community License rather than by this
+  # project's MIT licence (see json/gpu/LICENSE-GPU.md). A constraint
+  # installs nothing while still pinning the version a consumer gets if
+  # they add it themselves.
+  run_constraints:
+    - max-core ==26.8.0.dev2026111805
+
+about:
+  homepage: https://github.com/ehsanmok/json
+  repository: https://github.com/ehsanmok/json
+  documentation: https://github.com/ehsanmok/json
+  # The Apache-2.0/MIT mismatch this fork used to correct here is fixed
+  # upstream now, so `license` is no longer a delta. The file list is
+  # upstream's and is the more complete one.
+  license: MIT
+  license_file:
+    - LICENSE
+    - NOTICE
+    - json/gpu/LICENSE-GPU.md
+  summary: Packaged build of json (ehsanmok/json) — simdjson-backed JSON for Mojo, imported as `json`
+  description: |
+    THIS IS A REDISTRIBUTION. All of the code in this package is json, by
+    Ehsan M. Kermani <https://github.com/ehsanmok/json>, used under the MIT
+    licence. It is republished here only because json is not currently
+    published to any conda channel. Please direct stars, issues and pull
+    requests upstream, not to the repackager. This package should be abandoned
+    in favour of an official json package as soon as one exists.
+
+    Packaged by the magmalake project: https://github.com/magmalake/json_mlake
+
+    The module is imported as `json` (not `json_mlake`).
+
+    json is a high-performance JSON parsing library for Mojo.
+    Features include:
+    - Fast CPU parsing via simdjson FFI
+    - GPU-accelerated parsing for large files, from source only:
+      `json.gpu` needs max-core (Modular Community License) and is not
+      in this package's precompiled json.mojoc.
+    - Full JSON compliance (RFC 8259)
+    - JSONPath queries
+    - JSON Schema validation
+    - JSON Patch support

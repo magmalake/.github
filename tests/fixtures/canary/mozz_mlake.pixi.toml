@@ -1,0 +1,88 @@
+[workspace]
+authors = ["ehsanmok <ehsanmok@users.noreply.github.com>"]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+name = "mozz"
+platforms = ["osx-arm64", "linux-aarch64", "linux-64"]
+version = "0.2.2"
+preview = ["pixi-build"]
+
+[package]
+name = "mozz_mlake"
+version = "0.2.2"
+
+[package.build]
+# Lower bound only, deliberately.
+#
+# A build backend declares which `pixi-build-api-version` it speaks and
+# pixi provides that as a virtual package, so matching backend to client
+# is the solver's job. An exact pin takes that choice away: `==0.3.13`
+# speaks API 4, and every pixi newer than 0.70.2 provides >= 5, so
+# resolution failed outright with "pixi-build-api-version >=4,<5, for
+# which no candidates were found".
+#
+# That broke consumers, not just this repo. Because this is a git
+# *source* dependency, pixi resolves this backend while solving every
+# environment of every project that depends on it -- so this pin made a
+# plain `pixi install` fail in ehsanmok/json (its issue #3) even for
+# users who never touch this package.
+#
+# A range lets pixi 0.70.x pick 0.3.13 and newer pixi pick a 0.4.x that
+# speaks its API.
+backend = { name = "pixi-build-rattler-build", version = ">=0.3.13" }
+
+[dependencies]
+# The conda package is `mozz_mlake` (upstream calls it `mozz`), so the
+# self-dependency has to use the renamed one or pixi cannot resolve the
+# workspace at all. The Mojo import stays `from mozz import …` — that comes
+# from the `mozz/` directory, not from this name.
+mozz_mlake = { path = "." }
+mojo = "==1.3.0.dev2026111805"
+
+[feature.dev.dependencies]
+git        = ">=2"               # For version checks and pre-commit
+pre-commit = ">=4.2.0,<5"
+mojodoc    = { git = "https://github.com/ehsanmok/mojodoc.git", branch = "main" }
+
+[environments]
+default = { features = ["dev"], solve-group = "default" }
+dev     = { features = ["dev"], solve-group = "default" }
+
+[tasks]
+# ── Tests ────────────────────────────────────────────────────────────────────
+test-rng       = "mojo -I . tests/test_rng.mojo"
+test-mutators  = "mojo -I . tests/test_mutators.mojo"
+test-corpus    = "mojo -I . tests/test_corpus.mojo"
+test-arbitrary = "mojo -I . tests/test_arbitrary.mojo"
+test-property  = "mojo -I . tests/test_property.mojo"
+test-runner    = "mojo -I . tests/test_runner.mojo"
+
+tests = { cmd = "mojo -I . tests/test_rng.mojo && mojo -I . tests/test_mutators.mojo && mojo -I . tests/test_corpus.mojo && mojo -I . tests/test_arbitrary.mojo && mojo -I . tests/test_property.mojo && mojo -I . tests/test_runner.mojo && mojo -I . examples/01_raw_bytes.mojo && mojo -I . examples/02_property_test.mojo && mojo -I . examples/03_custom_arbitrary.mojo && mojo -I . examples/04_replay_crash.mojo" }
+
+# ── Examples ─────────────────────────────────────────────────────────────────
+example-raw-bytes     = "mojo -I . examples/01_raw_bytes.mojo"
+example-property-test = "mojo -I . examples/02_property_test.mojo"
+example-custom-type   = "mojo -I . examples/03_custom_arbitrary.mojo"
+example-replay        = "mojo -I . examples/04_replay_crash.mojo"
+
+examples = { cmd = "mojo -I . examples/01_raw_bytes.mojo && mojo -I . examples/02_property_test.mojo && mojo -I . examples/03_custom_arbitrary.mojo && mojo -I . examples/04_replay_crash.mojo" }
+
+# ── Benchmark ─────────────────────────────────────────────────────────────────
+bench = "mojo -I . benchmark/bench_runner.mojo"
+
+# ── Docs (powered by mojodoc) ─────────────────────────────────────────────────
+# docs:       build + serve at http://localhost:3000/mozz/ (blocks terminal)
+# docs-build: build static HTML → target/doc/ (for CI / GitHub Pages)
+docs       = "mojodoc ./mozz --open"
+docs-build = "mojodoc ./mozz --out-dir target/doc --base-url /mozz/"
+
+# ── Format ────────────────────────────────────────────────────────────────────
+install-pre-commit = "pre-commit install"
+format       = { cmd = "mojo format mozz tests examples benchmark", depends-on = ["install-pre-commit"] }
+format-check = { cmd = "bash -c 'mojo format mozz tests examples benchmark && git diff --exit-code mozz tests examples benchmark || (echo \"Error: Code is not formatted. Run \\\"pixi run format\\\" to fix.\" && exit 1)'" }
+
+# customs (github.com/magmalake/customs) reads this table; pixi ignores it.
+[tool.customs.lints]
+# `tests` runs each test file with its own `mojo` run. It is upstream's
+# (ehsanmok/mozz) task, kept as upstream has it in this redistribution, and
+# CI here doesn't run it: a warning, not a failure.
+mojo-run-per-test = "warn"

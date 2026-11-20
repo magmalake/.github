@@ -1,0 +1,47 @@
+package:
+  # The *package* is mozz_mlake; the *module* it installs is still `mozz`.
+  name: mozz_mlake
+  version: "0.2.2"
+
+source:
+  path: .
+
+build:
+  script:
+    - mkdir -p $PREFIX/lib/mojo
+    - cp -r mozz $PREFIX/lib/mojo/
+
+requirements:
+  host:
+    - mojo ==1.3.0.dev2026111805
+  run:
+    - mojo ==1.3.0.dev2026111805
+
+about:
+  homepage: https://github.com/ehsanmok/mozz
+  repository: https://github.com/ehsanmok/mozz
+  documentation: https://github.com/ehsanmok/mozz
+  license: MIT
+  license_file: LICENSE
+  summary: Packaged build of mozz (ehsanmok/mozz) — Mojo fuzzing, imported as `mozz`
+  description: |
+    THIS IS A REDISTRIBUTION. All of the code in this package is mozz, by
+    Ehsan M. Kermani <https://github.com/ehsanmok/mozz>, used under the MIT
+    licence. It is republished here only because mozz is not currently
+    published to any conda channel. Please direct stars, issues and pull
+    requests upstream, not to the repackager. This package should be abandoned
+    in favour of an official mozz package as soon as one exists.
+
+    Packaged by the magmalake project: https://github.com/magmalake/mozz_mlake
+
+    The module is imported as `mozz` (not `mozz_mlake`).
+
+    mozz is a zero-external-dependency fuzzing and property-based testing
+    library for Mojo.  Features include:
+
+    - Raw byte fuzzing via fuzz() with mutation-based input generation
+    - Typed property tests via forall[T]() with Arbitrary trait
+    - Byte property tests via forall_bytes()
+    - Standalone delta-debugging minimizer (shrink_bytes)
+    - Crash deduplication, replay, and report generation
+    - Pure Mojo — no libFuzzer, no compiler flags required

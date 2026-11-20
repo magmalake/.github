@@ -1,0 +1,252 @@
+# The tins the nightly canary builds, bottom-up. See tools/canary.py.
+#
+# One [[tin]] per repository, in an order where everything a tin consumes
+# comes before it. The canary clones each one at `ref` into `<work>/<dir>`, so
+# the checkouts are siblings and `-I ../x.mojo/src` resolves the way it does in
+# each repo's own CI.
+#
+#   dir       directory under the work dir, default: the repository name.
+#   repo      "org/name" on GitHub, default: "magmalake/<dir>". Another org is
+#             fine (dista would be repo = "morca-dev/dista").
+#   url       clone URL, default https://github.com/<repo> (another host, or
+#             a local repository for a trial run).
+#   ref       branch to clone, default "main".
+#   checks    what to run, in the tin's directory, each with `bash -e`. A
+#             string, or { name = "...", run = "..." }. Mirror what the tin's
+#             own CI runs for tests; leave out what needs secrets, a cluster,
+#             or a non-Mojo toolchain the tin's CI tests separately.
+#   needs     tins consumed by source path (`-I ../x/src`, CI checking the
+#             sibling out). Tins named in a pixi.toml git dependency are added
+#             automatically. A tin whose need failed is skipped, not run.
+#   dev_only  true for tools every tin's lint or bench environment pulls in;
+#             their failure does not block the tins that use them (a real
+#             build break still shows up in those tins' own logs).
+#   timeout   minutes per check, default 45.
+#   enabled   false keeps a tin on the list without running it; say why in
+#             `note`.
+
+[[tin]]
+dir = "bench.mojo"
+checks = ["pixi run test", "pixi run check-cli"]
+dev_only = true
+
+[[tin]]
+dir = "threads.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "lint.mojo"
+# `check` = unit tests + the corpus in text and --lsp mode; the corpus
+# imports threads from ../threads.mojo.
+checks = ["pixi run check"]
+needs = ["threads.mojo"]
+dev_only = true
+
+[[tin]]
+dir = "hashes.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "snappy.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "roaring.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "thrift.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "memory-region.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "deflate.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "sqlite.mojo"
+checks = ["pixi run test", "pixi run examples"]
+
+[[tin]]
+dir = "iceberg-rs.mojo"
+# The Mojo side; CI's `cargo test` of the Rust shim does not involve Mojo.
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "encoder.mojo"
+# `test` downloads two small sentence-embedding models from Hugging Face.
+checks = ["pixi run smoke-cpu", "pixi run test"]
+
+[[tin]]
+dir = "zstd.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "lz4.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "brotli.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "objectstore.mojo"
+# `check` = tests + the CLI build.
+checks = ["pixi run check"]
+
+[[tin]]
+dir = "arrow-mlake.mojo"
+checks = ["pixi run test"]
+needs = ["memory-region.mojo"]
+
+[[tin]]
+dir = "mozz_mlake"
+# CI builds the conda package and installs it; the package build is what
+# json_mlake's fuzz environment consumes, the tests are the tin's own.
+checks = [
+    { name = "package", run = "pixi exec rattler-build build --recipe recipe.yaml --output-dir build/canary-pkg -c \"$CANARY_CHANNEL\" -c conda-forge" },
+    "pixi run tests",
+]
+
+[[tin]]
+dir = "json_mlake"
+checks = [
+    { name = "package", run = "pixi exec rattler-build build --recipe recipe.yaml --output-dir build/canary-pkg -c \"$CANARY_CHANNEL\" -c conda-forge" },
+    "pixi run tests-cpu",
+]
+
+[[tin]]
+dir = "avro.mojo"
+checks = ["pixi run test", "pixi run test-cursor"]
+needs = ["deflate.mojo"]
+
+[[tin]]
+dir = "postgres.mojo"
+# `test` = unit + a throwaway server from the conda postgresql package + pool.
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "process.mojo"
+checks = ["pixi run test"]
+
+[[tin]]
+dir = "parquet.mojo"
+# `check` = tests + CLI + lint. carrow-lib is a shared library with several
+# @export functions, the shape that hit the build_field codegen bug
+# (parquet.mojo#74); it is linked and then loaded, because on Linux that bug
+# links fine and fails at dlopen.
+checks = [
+    "pixi run check",
+    { name = "carrow-lib + dlopen", run = "pixi run carrow-lib && pixi run python3 \"$CANARY_TOOLS/dlopen.py\" build/libpqcarrow*" },
+]
+needs = [
+    "arrow-mlake.mojo", "memory-region.mojo", "threads.mojo", "thrift.mojo",
+    "hashes.mojo", "snappy.mojo", "deflate.mojo", "avro.mojo",
+]
+
+[[tin]]
+dir = "flare_mlake"
+# The commands of CI's `tests` job. flare compiles against threads.mojo from
+# source.
+checks = [
+    { name = "tests", run = """
+T="-I ../threads.mojo/src -I ../threads.mojo/compat"
+pixi run mojo -I . $T tests/test_dylib.mojo
+pixi run mojo -I . $T tests/http/test_client_read_timeout.mojo
+pixi run mojo -I . $T tests/http/test_server_ws_upgrade.mojo
+pixi run mojo -I . $T tests/http/test_server_ws_offload.mojo
+pixi run mojo -I . $T tests/ws/test_ws.mojo
+pixi run mojo -I . $T tests/grpc/test_grpc.mojo
+pixi run mojo -I . $T tests/grpc/test_metadata.mojo
+pixi run mojo -I . $T tests/grpc/test_grpc_client.mojo
+pixi run mojo -I . $T tests/grpc/test_grpc_server_stream.mojo
+pixi run mojo -I . $T tests/grpc/test_grpc_compression.mojo
+pixi run mojo -I . $T tests/http/test_http.mojo
+pixi run mojo -I . $T tests/http2/test_h2_frame.mojo
+pixi run mojo -I . $T tests/http2/test_h2_hpack.mojo
+pixi run mojo -I . $T tests/tls/test_tls.mojo
+pixi run mojo -I . $T tests/net/test_net.mojo
+pixi run mojo -I . $T tests/net/test_fcntl_decl.mojo
+pixi run mojo -I . $T tests/net/test_libc_abi.mojo
+pixi run mojo -I . $T tests/crypto/test_base64.mojo
+pixi run mojo -I . $T tests/crypto/test_hmac.mojo
+""" },
+]
+needs = ["threads.mojo"]
+timeout = 60
+
+[[tin]]
+dir = "k8s.mojo"
+# CI's `unit` job; the `kind` job needs a cluster.
+checks = ["pixi run unit"]
+
+[[tin]]
+dir = "iceberg.mojo"
+# `check` = tests (with MinIO and a throwaway PostgreSQL) + CLI + lint.
+# carrow-scan-lib at default optimization is where the build_field codegen
+# bug showed up first: link failure on macOS, dlopen failure on Linux.
+checks = [
+    "pixi run check",
+    { name = "carrow-scan-lib + dlopen", run = "pixi run carrow-scan-lib && pixi run python3 \"$CANARY_TOOLS/dlopen.py\" build/libibscan*" },
+]
+needs = [
+    "hashes.mojo", "deflate.mojo", "avro.mojo", "thrift.mojo", "snappy.mojo",
+    "parquet.mojo", "arrow-mlake.mojo", "memory-region.mojo", "roaring.mojo",
+    "objectstore.mojo", "zstd.mojo", "lz4.mojo", "threads.mojo",
+    "sqlite.mojo", "postgres.mojo", "brotli.mojo",
+]
+timeout = 60
+
+[[tin]]
+dir = "flight.mojo"
+# pyarrow as the reference reader and Flight client.
+checks = [
+    "pixi run -e verify verify-ipc",
+    "pixi run -e verify verify-flight",
+    "pixi run -e verify verify-iceberg",
+]
+needs = [
+    "flare_mlake", "threads.mojo", "iceberg.mojo", "parquet.mojo",
+    "arrow-mlake.mojo", "memory-region.mojo", "avro.mojo", "deflate.mojo",
+    "thrift.mojo", "zstd.mojo", "snappy.mojo", "lz4.mojo", "brotli.mojo",
+    "hashes.mojo", "roaring.mojo", "objectstore.mojo",
+]
+timeout = 60
+
+# ── Not on the shared nightly pin yet ───────────────────────────────────────
+# These still pin Mojo 1.2.0 (or float), so a run against the nightly says
+# nothing about the nightly. Enable each once it moves to the one-toolchain pin.
+
+[[tin]]
+dir = "xml.mojo"
+checks = ["pixi run check"]
+enabled = false
+note = "still on mojo-compiler ==1.2.0"
+
+[[tin]]
+dir = "sigv4.mojo"
+checks = ["pixi run check"]
+enabled = false
+note = "still on mojo-compiler ==1.2.0"
+
+[[tin]]
+dir = "maws"
+checks = ["pixi run check"]
+needs = ["sigv4.mojo", "xml.mojo"]
+enabled = false
+note = "still on mojo-compiler ==1.2.0"
+
+[[tin]]
+dir = "restate.mojo"
+checks = ["pixi run build-example"]
+enabled = false
+note = "still on mojo-compiler ==1.2.0"
+
+[[tin]]
+dir = "requests"
+checks = ["pixi run test"]
+enabled = false
+note = "floats on mojo >=1.2.0 instead of the shared pin; its tests start local servers"

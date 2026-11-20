@@ -1,0 +1,86 @@
+[workspace]
+authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+name = "encoder.mojo"
+version = "0.1.0"
+description = "BERT-family text encoders in Mojo, on max-core: text in, normalized sentence embeddings out, no Python at runtime."
+license = "Apache-2.0"
+preview = ["pixi-build"]
+platforms = ["osx-arm64", "linux-aarch64", "linux-64"]
+
+# encoder as mojoshelf tin encoder-mojo: the `encoder` package.
+[package]
+name = "encoder-mojo"
+version = "0.1.0"
+
+[package.build]
+backend = { name = "pixi-build-mojo", version = "0.*" }
+
+[package.build.config.pkg]
+path = "src/encoder"
+name = "encoder"
+# max-core's .mojoc files (linalg, nn, layout, max), which it installs there.
+extra-args = ["-I", "$PREFIX/lib/mojo"]
+
+[package.host-dependencies]
+mojo-compiler = "==1.3.0.dev2026111805"
+max-core = "==26.8.0.dev2026111805"
+
+[package.build-dependencies]
+mojo-compiler = "==1.3.0.dev2026111805"
+
+[package.run-dependencies]
+mojo-compiler = "==1.3.0.dev2026111805"
+max-core = "==26.8.0.dev2026111805"
+
+# One toolchain: the tin, its tests and every consumer use the same Mojo
+# nightly. A precompiled Mojo package (.mojoc) loads only in the compiler
+# version that built it, so the pin is exact here and in [package] above, and
+# it moves across all magmalake tins together. max-core ships linalg/nn/layout
+# as .mojoc packages and needs no Python; it is the build that matches that
+# compiler. `mojo` rather than just `mojo-compiler`, for `mojo format`.
+[dependencies]
+max-core = "==26.8.0.dev2026111805"
+mojo = "==1.3.0.dev2026111805"
+
+# mojo links with a C compiler; containers have none, and conda's default
+# sysroot is older than the glibc 2.34 the Modular runtime libraries need.
+[target.linux-aarch64.dependencies]
+gcc = ">=13"
+sysroot_linux-aarch64 = ">=2.34"
+
+[target.linux-64.dependencies]
+gcc = ">=13"
+sysroot_linux-64 = ">=2.34"
+
+[tasks]
+mkbuild = "mkdir -p build"
+smoke-cpu = { cmd = "mojo build -O3 smoke/cpu.mojo -o build/smoke-cpu && ./build/smoke-cpu", depends-on = ["mkbuild"] }
+smoke-gpu = { cmd = "mojo build -O3 smoke/gpu.mojo -o build/smoke-gpu && ./build/smoke-gpu", depends-on = ["mkbuild"] }
+# The model files the tests read, at the revisions the fixtures were made from.
+models = "sh tools/get_models.sh"
+test-tokenizer = { cmd = "mojo build -O3 -I src tests/test_tokenizer.mojo -o build/test-tokenizer && ./build/test-tokenizer", depends-on = ["mkbuild", "models"] }
+test-safetensors = { cmd = "mojo build -O3 -I src tests/test_safetensors.mojo -o build/test-safetensors && ./build/test-safetensors", depends-on = ["mkbuild", "models"] }
+test-encoder = { cmd = "mojo build -O3 -I src tests/test_encoder.mojo -o build/test-encoder && ./build/test-encoder", depends-on = ["mkbuild", "models"] }
+test = { depends-on = ["test-tokenizer", "test-safetensors", "test-encoder"] }
+format = "mojo format src tests smoke bench"
+bench = { cmd = "mojo build -O3 -I src bench/bench.mojo -o build/bench && ./build/bench", depends-on = ["mkbuild", "models"] }
+
+[environments]
+fixtures = { features = ["fixtures"], no-default-feature = true }
+
+# Only for tools/make_fixtures.py, which writes the checked-in reference
+# outputs; tests and CI never need Python.
+[feature.fixtures]
+platforms = ["osx-arm64"]
+
+# Model downloads stay in the repo's build/ (on the external drive), not ~/.cache.
+[feature.fixtures.activation.env]
+HF_HOME = "$PIXI_PROJECT_ROOT/build/hf"
+
+[feature.fixtures.dependencies]
+python = "3.12.*"
+pytorch = "*"
+sentence-transformers = "*"
+tokenizers = "*"
+huggingface_hub = "*"
