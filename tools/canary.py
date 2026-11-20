@@ -22,7 +22,8 @@ moves the pin for them, every day, in a throwaway work directory:
 4. Run each tin's checks in order, with a timeout, one log per tin. A tin whose
    dependency failed is skipped ("blocked by X"), not run. A failure whose log
    shows the known flaky MLIR-pass crash (`isContiguousAccess` /
-   `properlyDominates`) is retried once and reported as flaky.
+   `properlyDominates`), or any other Mojo crash, is retried once and
+   reported as flaky; a crash that repeats fails.
 5. Write a Markdown summary (also to $GITHUB_STEP_SUMMARY), a JSON result file
    and the logs to `<out>`; exit 1 when anything failed or was blocked.
 
@@ -73,6 +74,10 @@ MAX_PACKAGES = ("max-core", "max", "modular")
 # The intermittent MLIR-pass crash (roughly 1 compile in 15 on the 1.3
 # nightlies); it passes on retry.
 FLAKY = re.compile(r"isContiguousAccess|properlyDominates")
+# Any Mojo crash. On Linux the crash often comes without a symbolized stack,
+# so the signature above cannot be seen; a crash is retried once either way.
+# A deterministic crash fails the retry too and is still reported.
+MOJO_CRASH = re.compile(r"Please submit a bug report to https://github\.com/modular")
 # Xcode 27's SDK against conda's linker, macOS only; see --macos-sdk.
 SDK_BREAK = re.compile(r"libSystem\.tbd.*unknown architecture")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -643,9 +648,10 @@ def run_tin(tin, work, out, env, args, log) -> Result:
                         f.write(f"\n=== {check.name} (again, after the macOS SDK workaround)\n")
                     attempts -= 1
                     continue
-            if code is not None and FLAKY.search(output) and attempts == 1:
-                res.retries.append(check.name)
-                log(f"  {tin.dir}: '{check.name}' hit the known flaky compiler crash, once more")
+            if code is not None and (FLAKY.search(output) or MOJO_CRASH.search(output)) and attempts == 1:
+                why = "flaky isContiguousAccess crash" if FLAKY.search(output) else "mojo crash"
+                res.retries.append(f"{check.name} ({why})")
+                log(f"  {tin.dir}: '{check.name}' hit a {why}, once more")
                 with open(log_path, "a") as f:
                     f.write(f"\n=== {check.name} (retry: known flaky compiler crash)\n")
                 continue

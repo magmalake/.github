@@ -312,6 +312,8 @@ class EndToEnd(unittest.TestCase):
         "a": ("echo 'error: broke'; exit 1", ""),
         "b": ("true", 'needs = ["a"]'),
         "c": ("if [ ! -e once ]; then touch once; echo 'isContiguousAccess crash'; exit 1; fi", ""),
+        # A crash that repeats is retried once and then fails.
+        "d": ("echo 'Please submit a bug report to https://github.com/modular/modular/issues'; exit 139", ""),
     }
 
     def test_run(self):
@@ -347,6 +349,9 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual(by["b"]["result"], "skipped")
             self.assertEqual(by["b"]["blocked_by"], ["a"])
             self.assertEqual(by["c"]["result"], "flaky-retried")
+            self.assertEqual(by["d"]["result"], "fail")
+            self.assertEqual(len(by["d"]["retries"]), 1)
+            self.assertEqual(by["d"]["errors"][0], "compiler crash")
             self.assertEqual(res["pinned"], [OLD])
             pixi = (d / "work" / "c" / "pixi.toml").read_text()
             self.assertIn(f'mojo-compiler = "=={NEW}"', pixi)
