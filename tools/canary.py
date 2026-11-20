@@ -9,8 +9,12 @@ moves the pin for them, every day, in a throwaway work directory:
 1. Resolve the target compiler: `--version`, else the newest `mojo-compiler`
    on the max-nightly channel (by upload time; the channel also carries old
    25.x builds that sort above 1.x by version).
-2. Clone every enabled tin in tools/canary-tins.toml at its `ref` (main) into
-   `<work>/<dir>`, as siblings, so `-I ../x.mojo/src` resolves as in CI.
+2. Clone every enabled tin in tools/canary-tins.toml at its `ref` (default:
+   the repository's default branch) into `<work>/<dir>`, as siblings, so
+   `-I ../x.mojo/src` resolves as in CI. Each repository is asked first
+   (`git ls-remote`): one this token cannot read is reported as "no access"
+   and skipped, with every tin that needs it, without failing the run; a
+   `ref` that is gone (its port PR merged, the branch deleted) fails that tin.
 3. Rewrite each checkout in place: every exact Mojo/MAX pin to the target
    (`mojo-compiler`, `mojo`, `mojo-python`, and `max`, `max-core`, `modular` to
    the MAX build of the same night), in every pixi.toml and recipe.yaml; and
@@ -27,10 +31,22 @@ moves the pin for them, every day, in a throwaway work directory:
 5. Write a Markdown summary (also to $GITHUB_STEP_SUMMARY), a JSON result file
    and the logs to `<out>`; exit 1 when anything failed or was blocked.
 
+Every tin and every check belongs to a `job` (default "libraries"), and
+`--job X` runs only the checks of job X; everything is still cloned and
+rewritten, so the graph is the same in every job. The workflow runs one job
+per runner, side by side, so the apps and examples do not lengthen the
+libraries' run.
+
 Usage:
     python3 tools/canary.py [--version 1.3.0.dev2026111905] [--work DIR]
-                            [--out DIR] [--only a,b] [--rewrite-only]
+                            [--out DIR] [--only a,b] [--job libraries]
+                            [--rewrite-only]
     python3 tools/canary.py --resolve        # print the newest nightly
+    python3 tools/canary.py --list-jobs      # the jobs the tins file names
+
+Private repositories: set CANARY_GIT_TOKEN to a token that can read them; it
+is used for the clones only (as an HTTP header in git's environment, never on
+a command line or in .git/config) and is not passed to the checks.
 
 `--work` defaults to ./canary-work. An existing checkout there is reused as
 it is (not reset), so a second run can retry one tin with `--only`; pass
@@ -433,10 +449,16 @@ def target_pins(mojo_version: str, max_version: str | None) -> dict[str, str]:
 # ── tins ────────────────────────────────────────────────────────────────────
 
 
+DEFAULT_JOB = "libraries"
+TIN_KEYS = {"dir", "repo", "url", "ref", "checks", "needs", "dev_only", "timeout",
+            "enabled", "note", "job", "submodules"}
+
+
 @dataclasses.dataclass
 class Check:
     name: str
     run: str
+    job: str = DEFAULT_JOB
 
 
 @dataclasses.dataclass
@@ -444,13 +466,19 @@ class Tin:
     dir: str
     repo: str
     url: str
-    ref: str
+    ref: str  # "" = the repository's default branch
     checks: list[Check]
     needs: list[str]
     dev_only: bool
     timeout: int
     enabled: bool
     note: str
+    job: str = DEFAULT_JOB
+    submodules: bool = False
+
+    @property
+    def jobs(self) -> list[str]:
+        return list(dict.fromkeys(c.job for c in self.checks))
 
 
 def load_tins(path: pathlib.Path) -> list[Tin]:
@@ -460,23 +488,29 @@ def load_tins(path: pathlib.Path) -> list[Tin]:
         d = t["dir"]
         if d in seen:
             raise SystemExit(f"{path}: {d} listed twice")
+        unknown = set(t) - TIN_KEYS
+        if unknown:
+            raise SystemExit(f"{path}: {d}: unknown keys {sorted(unknown)}")
+        job = t.get("job", DEFAULT_JOB)
         checks = []
         for c in t.get("checks", ["pixi run test"]):
             if isinstance(c, str):
-                checks.append(Check(c, c))
+                checks.append(Check(c, c, job))
             else:
-                checks.append(Check(c.get("name", c["run"].strip()), c["run"]))
+                checks.append(Check(c.get("name", c["run"].strip()), c["run"], c.get("job", job)))
         tin = Tin(
             dir=d,
             repo=t.get("repo", f"magmalake/{d}"),
             url=t.get("url", ""),
-            ref=t.get("ref", "main"),
+            ref=t.get("ref", ""),
             checks=checks,
             needs=list(t.get("needs", [])),
             dev_only=bool(t.get("dev_only", False)),
             timeout=int(t.get("timeout", 45)),
             enabled=bool(t.get("enabled", True)),
             note=t.get("note", ""),
+            job=job,
+            submodules=bool(t.get("submodules", False)),
         )
         for n in tin.needs:
             if n not in seen:
@@ -495,14 +529,84 @@ def git(*args, cwd=None) -> str:
     ).stdout.strip()
 
 
-def clone(tin: Tin, work: pathlib.Path, log) -> str:
+TOKEN_ENV = "CANARY_GIT_TOKEN"
+
+
+def git_env(environ=None) -> dict:
+    """The environment for clones: never prompt, and CANARY_GIT_TOKEN, if
+    set, as an Authorization header for github.com, passed through git's
+    GIT_CONFIG_* variables so it is on no command line and in no .git/config."""
+    env = dict(os.environ if environ is None else environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    token = env.pop(TOKEN_ENV, "")
+    if token:
+        import base64
+
+        cred = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        n = int(env.get("GIT_CONFIG_COUNT", "0") or 0)
+        env[f"GIT_CONFIG_KEY_{n}"] = "http.https://github.com/.extraheader"
+        env[f"GIT_CONFIG_VALUE_{n}"] = f"AUTHORIZATION: basic {cred}"
+        env["GIT_CONFIG_COUNT"] = str(n + 1)
+    return env
+
+
+# What git prints when the repository is private (or gone) and the token
+# cannot see it; over HTTPS GitHub answers 404 for both.
+NO_ACCESS = re.compile(
+    r"Repository not found|could not read Username|terminal prompts disabled|"
+    r"Authentication failed|returned error: 40[134]|Permission denied \(publickey\)",
+    re.I,
+)
+
+
+@dataclasses.dataclass
+class Probe:
+    status: str  # ok | no-access | no-ref | error
+    ref: str = ""  # the branch (or tag) that will be cloned
+    message: str = ""
+
+
+def clone_url(tin: Tin) -> str:
+    return tin.url or f"https://github.com/{tin.repo}"
+
+
+def probe(tin: Tin, env: dict, attempts: int = 3) -> Probe:
+    """Whether `tin` can be cloned at its ref, and which ref that is."""
+    url = clone_url(tin)
+    args = ["git", "ls-remote", "--symref", url, "HEAD"]
+    if tin.ref:
+        args += [f"refs/heads/{tin.ref}", f"refs/tags/{tin.ref}"]
+    for attempt in range(attempts):
+        p = subprocess.run(args, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+        if p.returncode == 0:
+            break
+        if NO_ACCESS.search(p.stderr):
+            return Probe("no-access", message=f"cannot read {tin.repo} with this token")
+        if attempt == attempts - 1:
+            err = p.stderr.strip().splitlines()
+            return Probe("error", message=f"git ls-remote {url}: {err[-1] if err else p.returncode}")
+        time.sleep(5)
+    if not tin.ref:
+        m = re.search(r"^ref: refs/heads/(\S+)\s+HEAD$", p.stdout, re.M)
+        return Probe("ok", ref=m.group(1) if m else "HEAD")
+    if re.search(rf"\srefs/(heads|tags)/{re.escape(tin.ref)}$", p.stdout, re.M):
+        return Probe("ok", ref=tin.ref)
+    return Probe(
+        "no-ref",
+        message=f"{tin.repo} has no branch or tag `{tin.ref}`; if its port PR has "
+        f"merged, drop `ref` from {tin.dir} in canary-tins.toml",
+    )
+
+
+def clone(tin: Tin, ref: str, work: pathlib.Path, log, env: dict) -> str:
     dest = work / tin.dir
     if not (dest / ".git").exists():
-        url = tin.url or f"https://github.com/{tin.repo}"
-        log(f"clone {url} ({tin.ref}) -> {dest}")
+        url = clone_url(tin)
+        log(f"clone {url} ({ref}) -> {dest}")
+        branch = ["--branch", ref] if ref and ref != "HEAD" else []
         subprocess.run(
-            ["git", "clone", "--quiet", "--depth", "1", "--branch", tin.ref, url, str(dest)],
-            check=True,
+            ["git", "clone", "--quiet", "--depth", "1", *branch, url, str(dest)],
+            check=True, env=env, stdin=subprocess.DEVNULL,
         )
     else:
         log(f"reuse {dest} as it is")
@@ -609,7 +713,10 @@ def first_errors(output: str, n: int = 6) -> list[str]:
 class Result:
     tin: str
     sha: str = ""
-    # pass | flaky-retried | fail | skipped (a need failed) | disabled | not-run
+    ref: str = ""  # the branch or tag cloned
+    repo: str = ""
+    # pass | flaky-retried | fail | skipped (a need failed) | disabled |
+    # not-run | no-access (this token cannot read it, or a need of it)
     result: str = "pending"
     seconds: float = 0.0
     failed_check: str = ""
@@ -620,14 +727,23 @@ class Result:
     note: str = ""
 
 
-def run_tin(tin, work, out, env, args, log) -> Result:
+SUBMODULES = Check(
+    "submodules", "git submodule update --init --recursive --depth 1 --jobs 4"
+)
+
+
+def run_tin(tin, work, out, env, args, log, checks=None) -> Result:
     res = Result(tin.dir)
     root = work / tin.dir
     log_path = out / "logs" / f"{tin.dir}.log"
     log_path.write_text("")
     res.log = str(log_path.relative_to(out))
     t0 = time.monotonic()
-    for check in tin.checks:
+    checks = tin.checks if checks is None else checks
+    if tin.submodules:
+        # Fetched only where the tin runs: duckdb.extension's is DuckDB itself.
+        checks = [SUBMODULES, *checks]
+    for check in checks:
         with open(log_path, "a") as f:
             f.write(f"\n=== {check.name}\n$ {check.run.strip()}\n\n")
         attempts, sdk_fixes = 0, 0
@@ -686,32 +802,49 @@ def summary_md(meta: dict, results: list[Result]) -> str:
     counts = {}
     for r in results:
         counts[r.result] = counts.get(r.result, 0) + 1
+    job = f" Job `{meta['job']}`." if meta.get("job") else ""
     lines = [
         head,
         "",
-        f"{meta['platform']}, MAX `{meta['max'] or 'n/a'}`, started {meta['started']}. "
+        f"{meta['platform']}, MAX `{meta['max'] or 'n/a'}`, started {meta['started']}.{job} "
         + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())),
         "",
-        "| tin | result | duration | details |",
-        "|---|---|---|---|",
+        "| tin | tested at | result | duration | details |",
+        "|---|---|---|---|---|",
     ]
     icon = {"pass": "pass", "flaky-retried": "pass (flaky, retried)", "fail": "**FAIL**",
-            "skipped": "skipped", "disabled": "disabled"}
+            "skipped": "skipped", "disabled": "disabled", "no-access": "**no access**"}
     for r in results:
         if r.result == "fail":
             errs = "<br>".join(_cell(e) for e in r.errors)
-            detail = f"`{_cell(r.failed_check)}`: {errs}"
+            detail = f"`{_cell(r.failed_check)}`: {errs}" if r.failed_check else errs
         elif r.result == "skipped":
             detail = "blocked by " + ", ".join(r.blocked_by)
+        elif r.result == "no-access" and r.blocked_by:
+            detail = "needs " + ", ".join(r.blocked_by) + ", which this token cannot read"
+        elif r.result == "no-access":
+            detail = "; ".join(_cell(e) for e in r.errors)
         elif r.result == "flaky-retried":
             detail = "retried: " + ", ".join(f"`{_cell(c)}`" for c in r.retries)
         else:
-            detail = _cell(r.note)
-        sha = f" `{r.sha[:7]}`" if r.sha else ""
+            detail = ""
+        if r.note:
+            detail = f"{detail}<br>{_cell(r.note)}" if detail else _cell(r.note)
         dur = fmt_duration(r.seconds) if r.seconds else ""
-        lines.append(f"| {r.tin}{sha} | {icon.get(r.result, r.result)} | {dur} | {detail} |")
+        lines.append(
+            f"| {r.tin} | {_tested_at(r)} | {icon.get(r.result, r.result)} | {dur} | {detail} |"
+        )
     lines += ["", "Logs and canary-results.json are in the run's `canary` artifact."]
     return "\n".join(lines) + "\n"
+
+
+def _tested_at(r: Result) -> str:
+    """`main` @ `abc1234`; a ref other than main/master in bold, since it
+    means the tin's main is not what was tested."""
+    if not r.ref and not r.sha:
+        return ""
+    ref = f"`{r.ref}`" if r.ref in ("main", "master", "") else f"**`{r.ref}`**"
+    return f"{ref} @ `{r.sha[:7]}`" if r.sha else ref
 
 
 def _cell(s: str) -> str:
@@ -732,10 +865,20 @@ def main(argv=None) -> int:
     ap.add_argument("--rewrite-only", action="store_true", help="clone and rewrite, run nothing")
     ap.add_argument("--resolve", action="store_true", help="print the target version and exit")
     ap.add_argument("--macos-sdk", help="SDK path for the macOS C-shim workaround (see above)")
+    ap.add_argument("--job", help="run only the checks of this job (see canary-tins.toml)")
+    ap.add_argument("--list-jobs", action="store_true", help="print the jobs and exit")
     args = ap.parse_args(argv)
 
     def log(msg):
         print(msg, flush=True)
+
+    tins = load_tins(args.tins)
+    jobs = list(dict.fromkeys(j for t in tins for j in t.jobs))
+    if args.list_jobs:
+        print("\n".join(jobs))
+        return 0
+    if args.job and args.job not in jobs:
+        raise SystemExit(f"--job: no tin has a check in job {args.job!r} (jobs: {', '.join(jobs)})")
 
     subdir = conda_subdir()
     repodata = None
@@ -750,7 +893,6 @@ def main(argv=None) -> int:
         log(f"warning: no max-core built with mojo-compiler {target}; MAX pins are left alone")
     pins = target_pins(target, max_version)
 
-    tins = load_tins(args.tins)
     work = args.work.resolve()
     if args.fresh and work.exists():
         shutil.rmtree(work)
@@ -764,23 +906,47 @@ def main(argv=None) -> int:
     enabled = [t for t in tins if t.enabled]
     log(f"target: mojo-compiler {target}, MAX {max_version or 'n/a'} ({args.channel}, {subdir})")
 
-    results = {t.dir: Result(t.dir, result="disabled", note=t.note) for t in tins}
-    shas = {}
+    results = {
+        t.dir: Result(t.dir, repo=t.repo, ref=t.ref, result="disabled", note=t.note) for t in tins
+    }
+    cloned: dict[str, str] = {}  # dir -> sha
+    genv = git_env()
+    gha = bool(os.environ.get("GITHUB_ACTIONS"))
     for t in enabled:
-        shas[t.dir] = clone(t, work, log)
-        results[t.dir].sha = shas[t.dir]
+        r = results[t.dir]
+        r.result = "pending"
+        pr = probe(t, genv)
+        if pr.status != "ok":
+            r.result = "no-access" if pr.status == "no-access" else "fail"
+            r.errors = [pr.message]
+            log(f"{r.result} {t.dir}: {pr.message}")
+            if gha and (args.job is None or args.job in t.jobs):
+                kind = "warning" if pr.status == "no-access" else "error"
+                print(f"::{kind} title=canary {t.dir}::{pr.message}", flush=True)
+            continue
+        r.ref = pr.ref
+        try:
+            cloned[t.dir] = r.sha = clone(t, pr.ref, work, log, genv)
+        except subprocess.CalledProcessError as e:
+            r.result, r.errors = "fail", [f"clone failed (exit {e.returncode})"]
+            log(f"fail {t.dir}: clone failed")
+    # Every enabled tin counts as a sibling, cloned or not, so a tin that
+    # depends on one that could not be cloned is seen to (and skipped).
     siblings = {t.repo.lower(): work / t.dir for t in enabled}
-    heads = {t.repo.lower(): shas[t.dir] for t in enabled}
+    heads = {t.repo.lower(): cloned[t.dir] for t in enabled if t.dir in cloned}
 
     old_pins: dict[str, set[str]] = {}
     needs: dict[str, set[str]] = {}
     dev_only = {t.dir for t in tins if t.dev_only}
+    order = [x.dir for x in enabled]
     for t in enabled:
+        if t.dir not in cloned:
+            needs[t.dir] = set(t.needs)
+            continue
         changes, used, old = rewrite_checkout(t, work, pins, siblings, heads)
         (out / "logs" / f"{t.dir}.rewrite.txt").write_text("\n".join(changes) + "\n")
         log(f"rewrote {t.dir}: {len(changes)} change(s)")
         needs[t.dir] = set(t.needs) | used
-        order = [x.dir for x in enabled]
         for n in sorted(used - dev_only):
             if order.index(n) > order.index(t.dir):
                 log(f"warning: {t.dir} depends on {n}, which runs after it")
@@ -795,6 +961,7 @@ def main(argv=None) -> int:
         "pinned": pinned,
         "channel": args.channel,
         "platform": subdir,
+        "job": args.job or "",
         "started": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
         "needs": {k: sorted(v) for k, v in needs.items()},
     }
@@ -802,7 +969,7 @@ def main(argv=None) -> int:
         print(json.dumps(meta, indent=2))
         return 0
 
-    env = dict(os.environ)
+    env = {k: v for k, v in os.environ.items() if k != TOKEN_ENV}
     env["CANARY_WORK"] = str(work)
     env["CANARY_TOOLS"] = str(HERE)
     env["CANARY_CHANNEL"] = args.channel
@@ -812,28 +979,36 @@ def main(argv=None) -> int:
 
     for t in enabled:
         r = results[t.dir]
+        if r.result != "pending":  # no access, or the clone failed
+            continue
+        checks = [c for c in t.checks if args.job is None or c.job == args.job]
+        if not checks:
+            r.result, r.note = "not-run", f"not in job {args.job}"
+            continue
         if only is not None and t.dir not in only:
             r.result, r.note = "not-run", "not selected (--only)"
             continue
-        blockers = sorted(
-            n for n in needs[t.dir]
-            if n not in dev_only
-            and results.get(n) is not None
-            and results[n].result in ("fail", "skipped")
-        )
+        deps = [n for n in needs[t.dir] if n not in dev_only and n in results]
+        no_access = sorted(n for n in deps if results[n].result == "no-access")
+        blockers = sorted(n for n in deps if results[n].result in ("fail", "skipped"))
         if blockers:
             r.result, r.blocked_by = "skipped", blockers
             log(f"skip {t.dir}: blocked by {', '.join(blockers)}")
             continue
-        log(f"run {t.dir} ({len(t.checks)} check(s))")
-        res = run_tin(t, work, out, env, args, log)
-        res.sha = r.sha
+        if no_access:
+            r.result, r.blocked_by = "no-access", no_access
+            log(f"skip {t.dir}: needs {', '.join(no_access)}, which this token cannot read")
+            continue
+        log(f"run {t.dir} ({len(checks)} check(s){f', job {args.job}' if args.job else ''})")
+        res = run_tin(t, work, out, env, args, log, checks)
+        res.sha, res.ref, res.repo, res.note = r.sha, r.ref, r.repo, t.note
         results[t.dir] = res
         log(f"  {t.dir}: {res.result} in {fmt_duration(res.seconds)}"
             + (f" ({res.failed_check})" if res.failed_check else ""))
 
     ordered = [results[t.dir] for t in tins]
-    md = summary_md(meta, ordered)
+    shown = [results[t.dir] for t in tins if args.job is None or args.job in t.jobs]
+    md = summary_md(meta, shown)
     (out / "canary-summary.md").write_text(md)
     (out / "canary-results.json").write_text(
         json.dumps({**meta, "results": [dataclasses.asdict(r) for r in ordered]}, indent=2) + "\n"
@@ -843,7 +1018,8 @@ def main(argv=None) -> int:
             f.write(md)
     print()
     print(md)
-    bad = [r for r in ordered if r.result == "fail" or (r.result == "skipped" and r.blocked_by)]
+    # A tin left out by --only counts only through the tins it blocks.
+    bad = [r for r in shown if r.result in ("fail", "skipped") and (only is None or r.tin in only)]
     return 1 if bad else 0
 
 

@@ -5,16 +5,32 @@
 # the checkouts are siblings and `-I ../x.mojo/src` resolves the way it does in
 # each repo's own CI.
 #
-#   dir       directory under the work dir, default: the repository name.
+#   dir       directory under the work dir, default: the repository name. It
+#             is the path the other repos' CI checks the tin out at
+#             (morca-dev/dista is "dista.mojo": morca's -I ../dista.mojo/src).
 #   repo      "org/name" on GitHub, default: "magmalake/<dir>". Another org is
-#             fine (dista would be repo = "morca-dev/dista").
+#             fine (repo = "morca-dev/dista").
 #   url       clone URL, default https://github.com/<repo> (another host, or
 #             a local repository for a trial run).
-#   ref       branch to clone, default "main".
+#   ref       branch (or tag) to clone, default: the repository's default
+#             branch. Only for a tin whose port to the shared pin is still an
+#             open PR: name the PR in `note`, and drop `ref` once it merges
+#             (a ref that no longer exists fails the tin and says so). The
+#             summary's "tested at" column puts any ref but main in bold.
 #   checks    what to run, in the tin's directory, each with `bash -e`. A
-#             string, or { name = "...", run = "..." }. Mirror what the tin's
-#             own CI runs for tests; leave out what needs secrets, a cluster,
-#             or a non-Mojo toolchain the tin's CI tests separately.
+#             string, or { name = "...", run = "...", job = "..." }. Mirror
+#             what the tin's own CI runs for tests; leave out what needs
+#             secrets, a cluster, docker, or a non-Mojo toolchain the tin's
+#             CI tests separately.
+#   job       which workflow job runs the tin's checks, default "libraries";
+#             a check's own `job` overrides it. Each job is a runner of its
+#             own (`--job`, and the matrix in nightly-canary.yml, which must
+#             list every job named here), so the apps and examples do not
+#             lengthen the libraries' run. Every job clones and rewrites the
+#             whole list; a need in another job is built from source, not
+#             waited for.
+#   submodules  true to fetch git submodules before the checks (only in a
+#             job that runs the tin).
 #   needs     tins consumed by source path (`-I ../x/src`, CI checking the
 #             sibling out). Tins named in a pixi.toml git dependency outside
 #             [feature.*] tables are added automatically. A tin whose need
@@ -222,6 +238,145 @@ needs = [
     "hashes.mojo", "roaring.mojo", "objectstore.mojo",
 ]
 timeout = 60
+
+# ── Apps: dista, morca and the census ───────────────────────────────────────
+# Their ports to the shared pin are still draft PRs, so each is tested at its
+# port branch. When the PR merges, delete the `ref` line (and this sentence of
+# the note): main is then the port.
+
+[[tin]]
+dir = "dista.mojo"
+repo = "morca-dev/dista"
+ref = "mojo-1.3-nightly"
+note = "at the port branch of morca-dev/dista#144 (draft); drop `ref` when it merges"
+job = "apps"
+# CI's `test`, `data` and `fuzz` jobs; its `kind` job needs a cluster.
+checks = [
+    "pixi run test",
+    { name = "data", run = "pixi run -e data test-data" },
+    { name = "fuzz", run = "FUZZ_RUNS=20000 pixi run -e fuzz fuzz" },
+]
+# The data environment compiles the read stack from the checkouts next door.
+needs = [
+    "memory-region.mojo", "arrow-mlake.mojo", "parquet.mojo", "threads.mojo",
+    "thrift.mojo", "hashes.mojo", "snappy.mojo", "deflate.mojo", "avro.mojo",
+    "roaring.mojo", "objectstore.mojo", "zstd.mojo", "lz4.mojo", "brotli.mojo",
+    "sqlite.mojo", "postgres.mojo", "iceberg.mojo",
+]
+
+[[tin]]
+dir = "morca"
+repo = "morca-dev/morca"
+ref = "mojo-1.3-nightly"
+note = "at the port branch of morca-dev/morca#550 (draft); drop `ref` when it merges"
+# CI's three `test` shards and `fuzz` in one job, its three `data` groups and
+# `rust-worker` in another: ~95 minutes in all with CI's caches, more cold.
+# All of it starts its own PostgreSQL and MinIO from conda-forge. The Rust
+# tests run cargo in the `rust` environment (scripts/cargo.sh), which holds no
+# Mojo: on macOS conda-forge's rust and the nightly compiler both ship
+# lib/libLLVM.dylib. The `ouromo` environment is commented out in pixi.toml
+# (no ouromo is built on this compiler) and is not used here.
+# Left out: kind (a cluster), the runtime and project images (docker),
+# project-test and project-release (scratch projects through morca's
+# reusable workflows), runtime-lock (deploy/runtime/pixi.lock against
+# morca-mojo's pins, which the canary rewrites), formal (Lean, no Mojo),
+# format, version and customs.
+job = "morca"
+checks = [
+    { name = "test-executor-core", run = "MORCA_ADMIT_MEMORY_PRESSURE=0 pixi run -e default test-executor-core" },
+    { name = "test-executor-workers", run = "MORCA_ADMIT_MEMORY_PRESSURE=0 pixi run -e default test-executor-workers" },
+    { name = "test-scheduler-ui", run = "MORCA_ADMIT_MEMORY_PRESSURE=0 pixi run -e default test-scheduler-ui" },
+    { name = "fuzz", run = "FUZZ_RUNS=20000 pixi run -e fuzz fuzz" },
+    { name = "data / tables", run = "MORCA_ADMIT_MEMORY_PRESSURE=0 pixi run -e data test-data-tables", job = "morca-data" },
+    { name = "data / sensors", run = "MORCA_ADMIT_MEMORY_PRESSURE=0 pixi run -e data test-data-sensors", job = "morca-data" },
+    { name = "data / keyed", run = "MORCA_ADMIT_MEMORY_PRESSURE=0 pixi run -e data test-data-keyed", job = "morca-data" },
+    { name = "rust-worker", run = "pixi run -e data test-rust-worker && pixi run -e data test-hindcast && pixi run -e data test-rust-sdk", job = "morca-data" },
+]
+# dista and k8s compile from source (DEP_INC), and the data environment the
+# whole read stack.
+needs = [
+    "dista.mojo", "k8s.mojo", "memory-region.mojo", "arrow-mlake.mojo",
+    "parquet.mojo", "threads.mojo", "thrift.mojo", "hashes.mojo", "snappy.mojo",
+    "deflate.mojo", "avro.mojo", "roaring.mojo", "objectstore.mojo", "zstd.mojo",
+    "lz4.mojo", "brotli.mojo", "sqlite.mojo", "postgres.mojo", "iceberg.mojo",
+]
+timeout = 60
+
+[[tin]]
+# The GH Archive census (the gharchive.example worktree is this repository).
+dir = "census"
+repo = "morca-dev/census"
+ref = "mojo-1.3-nightly"
+note = "at the port branch of morca-dev/census#222 (draft); drop `ref` when it merges"
+job = "apps"
+# CI's `test` job. Left out: the image jobs (docker, and a push to GHCR off
+# main), customs, the morca.dev.toml grep (no Mojo), and test-daily (three
+# hours of GH Archive off the network; not in CI either).
+checks = ["pixi run build", "pixi run test", "pixi run test-register", "pixi run test-upgrade"]
+timeout = 60
+
+# ── Examples ────────────────────────────────────────────────────────────────
+
+[[tin]]
+dir = "taxibench.example"
+job = "examples"
+# No CI of its own. The two programs build against iceberg-mojo (a package,
+# here from the iceberg.mojo checkout); running the suite needs the TLC
+# downloads (`load`), and the images docker, so neither is run.
+checks = ["pixi run build", "pixi run build-probe"]
+
+[[tin]]
+dir = "datafusion.example"
+job = "examples"
+# CI's `pixi run test`: the Mojo bridge (a shared library from the read stack's
+# sources), the Rust provider, and the oracle tests against a PyIceberg table.
+checks = ["pixi run test"]
+needs = [
+    "iceberg.mojo", "parquet.mojo", "arrow-mlake.mojo", "memory-region.mojo",
+    "avro.mojo", "deflate.mojo", "thrift.mojo", "zstd.mojo", "snappy.mojo",
+    "lz4.mojo", "brotli.mojo", "hashes.mojo", "roaring.mojo", "objectstore.mojo",
+    "threads.mojo",
+]
+timeout = 60
+
+[[tin]]
+dir = "duckdb.extension"
+job = "examples"
+# DuckDB and its extension tools are submodules. CI's build (the bridge, then
+# DuckDB and the extension, ~20 minutes cold) and its SQL tests, which make
+# their fixtures with uv, installed the way CI does when it is missing. Plus
+# test-mojo, the bridge's kernels on their own, which CI does not run.
+submodules = true
+checks = [
+    { name = "build + test", run = """
+export PATH="$HOME/.local/bin:$PATH"
+command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+pixi run test
+""" },
+    "pixi run test-mojo",
+]
+needs = [
+    "iceberg.mojo", "parquet.mojo", "arrow-mlake.mojo", "memory-region.mojo",
+    "avro.mojo", "deflate.mojo", "thrift.mojo", "zstd.mojo", "snappy.mojo",
+    "lz4.mojo", "brotli.mojo", "hashes.mojo", "roaring.mojo", "objectstore.mojo",
+    "threads.mojo",
+]
+timeout = 60
+
+[[tin]]
+dir = "pyarrow-flight.example"
+job = "examples"
+# `check`: every client example against the repo's pyarrow reference server.
+# No Mojo is compiled (the run against flight.mojo's server is a manual step
+# in its README), so this watches only its Python side: pyarrow, Daft.
+checks = ["pixi run check"]
+
+[[tin]]
+dir = "threads.example"
+job = "examples"
+checks = ["pixi run check"]
+enabled = false
+note = "frozen at mojo ==1.0.0 on purpose: the companion code of the Mojo 1.0 threads post"
 
 # ── Not on the shared nightly pin yet ───────────────────────────────────────
 # These still pin Mojo 1.2.0 (or float), so a run against the nightly says

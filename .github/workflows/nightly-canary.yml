@@ -7,11 +7,18 @@
 # worth of changes to bisect. This moves the pin every day in a scratch
 # checkout of the whole graph, so a break is noticed the day it lands.
 #
-# tools/canary.py clones every tin in tools/canary-tins.toml at main as
+# tools/canary.py clones every tin in tools/canary-tins.toml (at main, or at
+# the port branch the file names for a tin whose port is still a PR) as
 # siblings, rewrites each pixi.toml (and recipe.yaml) to the target nightly,
 # turns the git-pinned sibling dependencies into path dependencies on the
 # sibling checkouts, and runs each tin's tests bottom-up. Nothing is pushed
-# anywhere: the red run and its summary table are the signal.
+# anywhere: the red run and its summary tables are the signal.
+#
+# One runner per job of the tins file: the libraries, the apps (dista and the
+# census), morca's tests, morca's data and Rust tests, and the examples. Each
+# clones and rewrites the whole graph and builds what its tins need from
+# source, so none waits for another, and the apps and examples don't lengthen
+# the libraries' ~45 minutes.
 #
 # Linux only for now; hosted macOS runners are scarce, and the tins' own
 # scheduled CI covers macOS against the pinned nightly.
@@ -34,6 +41,10 @@ on:
         description: Comma-separated tins to run (empty = all); the rest are still cloned.
         type: string
         default: ""
+      job:
+        description: One job to run (libraries, apps, morca, morca-data, examples; empty = all).
+        type: string
+        default: ""
   # A change to the canary itself runs the canary.
   pull_request:
     paths:
@@ -52,39 +63,50 @@ concurrency:
 
 jobs:
   canary:
-    name: every tin on the newest nightly
+    name: ${{ matrix.job }} on the newest nightly
     runs-on: ubuntu-latest
-    # A full run takes about 45 minutes on ubuntu-latest and uses ~15 GB
-    # of disk; the timeout leaves room for a slow day.
+    # The libraries take about 45 minutes on ubuntu-latest and ~15 GB of disk;
+    # morca's two jobs are the longest. The timeout leaves room for a slow day.
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every job named in tools/canary-tins.toml (`canary.py --list-jobs`;
+        # tests/test_canary.py checks the two agree).
+        job: [libraries, apps, morca, morca-data, examples]
     steps:
       - uses: actions/checkout@v4
+        if: ${{ !inputs.job || inputs.job == matrix.job }}
 
       - uses: prefix-dev/setup-pixi@v0.10.2
+        if: ${{ !inputs.job || inputs.job == matrix.job }}
         with:
           # The version every tin's lock is written by.
           pixi-version: v0.78.0
           run-install: false
 
       - name: Canary
+        if: ${{ !inputs.job || inputs.job == matrix.job }}
         env:
           VERSION: ${{ github.event.inputs.version }}
           ONLY: ${{ github.event.inputs.only }}
+          JOB: ${{ matrix.job }}
         run: |
           python3 tools/canary.py \
             --work "$RUNNER_TEMP/canary" \
             --out canary-out \
+            --job "$JOB" \
             ${VERSION:+--version "$VERSION"} \
             ${ONLY:+--only "$ONLY"}
 
       - name: Disk use
-        if: always()
+        if: ${{ always() && (!inputs.job || inputs.job == matrix.job) }}
         run: df -h /
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && (!inputs.job || inputs.job == matrix.job) }}
         with:
-          name: canary
+          name: canary-${{ matrix.job }}
           path: canary-out/
           if-no-files-found: warn
           retention-days: 30
