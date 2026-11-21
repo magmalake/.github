@@ -411,8 +411,6 @@ job = "examples"
 # it serves compared with pyarrow's own read of the table's files. Not run:
 # `transports` (the 79.5M-row taxi table) and the in-process Daft source
 # (iceberg.mojo's scan library), neither of which `check-mojo` builds.
-ref = "check-mojo-server"
-note = "drop `ref` when magmalake/pyarrow-flight.example#8 merges"
 checks = ["pixi run check", "pixi run check-mojo"]
 needs = [
     "flight.mojo", "flare_mlake", "threads.mojo", "iceberg.mojo", "parquet.mojo",
