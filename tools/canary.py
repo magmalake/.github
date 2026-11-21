@@ -8,7 +8,12 @@ moves the pin for them, every day, in a throwaway work directory:
 
 1. Resolve the target compiler: `--version`, else the newest `mojo-compiler`
    on the max-nightly channel (by upload time; the channel also carries old
-   25.x builds that sort above 1.x by version).
+   25.x builds that sort above 1.x by version). `--version pin` is the
+   version the tins pin themselves, read from their manifests after the
+   clone (they must all agree; a tin that pins another version is an error
+   that names it). At the pin nothing is re-pinned and only the sibling
+   dependencies move, so a run there tests the canary rather than a nightly:
+   it is what the workflow runs on a pull request.
 2. Clone every enabled tin in tools/canary-tins.toml at its `ref` (default:
    the repository's default branch) into `<work>/<dir>`, as siblings, so
    `-I ../x.mojo/src` resolves as in CI. Each repository is asked first
@@ -23,7 +28,10 @@ moves the pin for them, every day, in a throwaway work directory:
    the solve would fail; as path dependencies the whole graph is built from
    the rewritten sources, by the target compiler. The locks are kept as solver
    hints but never enforced (no --locked / --frozen).
-4. Run each tin's checks in order, with a timeout, one log per tin. A tin whose
+4. Run each tin's checks in order, with a timeout, one log per tin. A failed
+   check does not stop the tin: its other checks still run, so one crash does
+   not hide the rest, unless the failed check is marked `fatal` (a build the
+   later checks use), and then the rest are reported as not run. A tin whose
    dependency failed is skipped ("blocked by X"), not run. A failure whose log
    shows the known flaky MLIR-pass crash (`isContiguousAccess` /
    `properlyDominates`), or any other Mojo crash, is retried once and
@@ -38,8 +46,9 @@ per runner, side by side, so the apps and examples do not lengthen the
 libraries' run.
 
 Usage:
-    python3 tools/canary.py [--version 1.3.0.dev2026111905] [--work DIR]
-                            [--out DIR] [--only a,b] [--job libraries]
+    python3 tools/canary.py [--version 1.3.0.dev2026111905 | --version pin]
+                            [--work DIR] [--out DIR] [--only a,b]
+                            [--job libraries] [--reason "pull request"]
                             [--rewrite-only]
     python3 tools/canary.py --resolve        # print the newest nightly
     python3 tools/canary.py --list-jobs      # the jobs the tins file names
@@ -454,11 +463,16 @@ TIN_KEYS = {"dir", "repo", "url", "ref", "checks", "needs", "dev_only", "timeout
             "enabled", "note", "job", "submodules"}
 
 
+CHECK_KEYS = {"name", "run", "job", "fatal"}
+
+
 @dataclasses.dataclass
 class Check:
     name: str
     run: str
     job: str = DEFAULT_JOB
+    # A failure stops the tin's remaining checks (they need what this builds).
+    fatal: bool = False
 
 
 @dataclasses.dataclass
@@ -497,7 +511,11 @@ def load_tins(path: pathlib.Path) -> list[Tin]:
             if isinstance(c, str):
                 checks.append(Check(c, c, job))
             else:
-                checks.append(Check(c.get("name", c["run"].strip()), c["run"], c.get("job", job)))
+                bad = set(c) - CHECK_KEYS
+                if bad:
+                    raise SystemExit(f"{path}: {d}: unknown check keys {sorted(bad)}")
+                checks.append(Check(c.get("name", c["run"].strip()), c["run"],
+                                    c.get("job", job), bool(c.get("fatal", False))))
         tin = Tin(
             dir=d,
             repo=t.get("repo", f"magmalake/{d}"),
@@ -658,6 +676,39 @@ def rewrite_checkout(
     return changes, used, old
 
 
+def checkout_pins(root: pathlib.Path) -> set[str]:
+    """The exact Mojo versions a checkout pins, from its committed manifests.
+
+    The same scan the rewrite does (so the same entries count as pins), with
+    nothing written.
+    """
+    probe_pins = {name: "0" for name in MOJO_PACKAGES}
+    found: set[str] = set()
+    for f in manifests(root, "pixi.toml"):
+        rw = rewrite_pixi_toml(committed(f, root), probe_pins, {}, f.parent)
+        for v in rw.old_pins.values():
+            found |= v
+    for f in manifests(root, "recipe.yaml"):
+        for v in rewrite_recipe(committed(f, root), probe_pins, {})[2].values():
+            found |= v
+    return found
+
+
+def agreed_pin(per_tin: dict[str, set[str]]) -> str:
+    """The one Mojo version every tin pins, or an error naming who differs."""
+    by_version: dict[str, list[str]] = {}
+    for tin, versions in per_tin.items():
+        for v in versions:
+            by_version.setdefault(v, []).append(tin)
+    if not by_version:
+        raise SystemExit("--version pin: no tin pins an exact Mojo version")
+    if len(by_version) > 1:
+        groups = sorted(by_version.items(), key=lambda kv: -len(kv[1]))
+        detail = "; ".join(f"{v}: {', '.join(sorted(ts))}" for v, ts in groups)
+        raise SystemExit(f"--version pin: the tins do not agree on the Mojo pin ({detail})")
+    return next(iter(by_version))
+
+
 def patch_sdk(root: pathlib.Path, sdk: str) -> int:
     n = 0
     body = f"export SDKROOT={sdk}\nexport CONDA_BUILD_SYSROOT={sdk}\n"
@@ -719,7 +770,11 @@ class Result:
     # not-run | no-access (this token cannot read it, or a need of it)
     result: str = "pending"
     seconds: float = 0.0
-    failed_check: str = ""
+    # Every check that failed, in order: {"check": name, "errors": [...]}.
+    failures: list[dict] = dataclasses.field(default_factory=list)
+    # Checks not run because a `fatal` check before them failed.
+    not_run: list[str] = dataclasses.field(default_factory=list)
+    # Failures before any check ran: no access, a gone ref, a failed clone.
     errors: list[str] = dataclasses.field(default_factory=list)
     retries: list[str] = dataclasses.field(default_factory=list)
     blocked_by: list[str] = dataclasses.field(default_factory=list)
@@ -728,7 +783,7 @@ class Result:
 
 
 SUBMODULES = Check(
-    "submodules", "git submodule update --init --recursive --depth 1 --jobs 4"
+    "submodules", "git submodule update --init --recursive --depth 1 --jobs 4", fatal=True
 )
 
 
@@ -743,7 +798,7 @@ def run_tin(tin, work, out, env, args, log, checks=None) -> Result:
     if tin.submodules:
         # Fetched only where the tin runs: duckdb.extension's is DuckDB itself.
         checks = [SUBMODULES, *checks]
-    for check in checks:
+    for i, check in enumerate(checks):
         with open(log_path, "a") as f:
             f.write(f"\n=== {check.name}\n$ {check.run.strip()}\n\n")
         attempts, sdk_fixes = 0, 0
@@ -773,12 +828,22 @@ def run_tin(tin, work, out, env, args, log, checks=None) -> Result:
                 continue
             break
         if code != 0:
-            res.result = "fail"
-            res.failed_check = check.name
-            res.errors = (
-                [f"timed out after {tin.timeout} min"] if code is None else first_errors(output)
-            )
-            break
+            res.failures.append({
+                "check": check.name,
+                "errors": [f"timed out after {tin.timeout} min"] if code is None
+                else first_errors(output),
+            })
+            if check.fatal:
+                res.not_run = [c.name for c in checks[i + 1:]]
+                if res.not_run:
+                    with open(log_path, "a") as f:
+                        f.write(f"\n=== not run, '{check.name}' failed and the rest need it: "
+                                f"{', '.join(res.not_run)}\n")
+                break
+            if i + 1 < len(checks):
+                log(f"  {tin.dir}: '{check.name}' failed, going on with the rest")
+    if res.failures:
+        res.result = "fail"
     else:
         res.result = "flaky-retried" if res.retries else "pass"
     res.seconds = time.monotonic() - t0
@@ -793,12 +858,20 @@ def fmt_duration(s: float) -> str:
 def summary_md(meta: dict, results: list[Result]) -> str:
     pinned = ", ".join(meta["pinned"]) or "unknown"
     same = meta["target"] in meta["pinned"] and len(meta["pinned"]) == 1
-    head = (
-        f"**Mojo nightly canary: `mojo-compiler {meta['target']}`"
-        f"{' (newest on the channel)' if meta['resolved'] else ''} "
-        f"against the tins' pin `{pinned}`"
-        f"{' (the same version)' if same else ''}.**"
-    )
+    reason = f" ({meta['reason']})" if meta.get("reason") else ""
+    if meta.get("mode") == "pin":
+        head = (
+            f"**Mojo canary at the pinned version{reason}: `mojo-compiler {meta['target']}`, "
+            f"the version every tin pins. Nothing is re-pinned, so this run tests the "
+            f"canary itself, not a newer nightly.**"
+        )
+    else:
+        head = (
+            f"**Mojo nightly canary{reason}: `mojo-compiler {meta['target']}`"
+            f"{' (newest on the channel)' if meta['resolved'] else ''} "
+            f"against the tins' pin `{pinned}`"
+            f"{' (the same version)' if same else ''}.**"
+        )
     counts = {}
     for r in results:
         counts[r.result] = counts.get(r.result, 0) + 1
@@ -815,9 +888,22 @@ def summary_md(meta: dict, results: list[Result]) -> str:
     icon = {"pass": "pass", "flaky-retried": "pass (flaky, retried)", "fail": "**FAIL**",
             "skipped": "skipped", "disabled": "disabled", "no-access": "**no access**"}
     for r in results:
-        if r.result == "fail":
-            errs = "<br>".join(_cell(e) for e in r.errors)
-            detail = f"`{_cell(r.failed_check)}`: {errs}" if r.failed_check else errs
+        if r.result == "fail" and r.failures:
+            # Several failures share one cell: three lines each, the log has the rest.
+            n = 6 if len(r.failures) == 1 else 3
+            parts = [
+                f"`{_cell(f['check'])}`: " + "<br>".join(_cell(e) for e in f["errors"][:n])
+                for f in r.failures
+            ]
+            if len(r.failures) > 1:
+                parts.insert(0, f"{len(r.failures)} checks failed:")
+            if r.not_run:
+                parts.append("not run (they need the failed `{}`): {}".format(
+                    _cell(r.failures[-1]["check"]),
+                    ", ".join(f"`{_cell(c)}`" for c in r.not_run)))
+            detail = "<br>".join(parts)
+        elif r.result == "fail":
+            detail = "<br>".join(_cell(e) for e in r.errors)
         elif r.result == "skipped":
             detail = "blocked by " + ", ".join(r.blocked_by)
         elif r.result == "no-access" and r.blocked_by:
@@ -855,7 +941,10 @@ def _cell(s: str) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--version", help="mojo-compiler version (default: newest nightly)")
+    ap.add_argument("--version", help="mojo-compiler version (default: newest nightly); "
+                    "`pin` = the version the tins pin, read from them after the clone")
+    ap.add_argument("--reason", default="",
+                    help="why this run, for the summary (e.g. 'pull request', 'scheduled')")
     ap.add_argument("--max-version", help="MAX version to pair with it (default: from the channel)")
     ap.add_argument("--channel", default=DEFAULT_CHANNEL)
     ap.add_argument("--tins", type=pathlib.Path, default=DEFAULT_TINS)
@@ -882,17 +971,19 @@ def main(argv=None) -> int:
         raise SystemExit(f"--job: no tin has a check in job {args.job!r} (jobs: {', '.join(jobs)})")
 
     subdir = conda_subdir()
+    at_pin = args.version == "pin"
+    if at_pin and args.resolve:
+        raise SystemExit("--resolve: the pin is read from the clones; run with --rewrite-only")
     repodata = None
     if not (args.version and args.max_version):
         repodata = fetch_repodata(args.channel, subdir)
-    target = args.version or newest_mojo(repodata)
-    max_version = args.max_version or max_for(repodata, target)
-    if args.resolve:
-        print(target)
-        return 0
-    if not max_version:
-        log(f"warning: no max-core built with mojo-compiler {target}; MAX pins are left alone")
-    pins = target_pins(target, max_version)
+    target = max_version = None
+    if not at_pin:
+        target = args.version or newest_mojo(repodata)
+        max_version = args.max_version or max_for(repodata, target)
+        if args.resolve:
+            print(target)
+            return 0
 
     work = args.work.resolve()
     if args.fresh and work.exists():
@@ -905,7 +996,8 @@ def main(argv=None) -> int:
         raise SystemExit(f"--only: unknown tins {sorted(only - {t.dir for t in tins})}")
 
     enabled = [t for t in tins if t.enabled]
-    log(f"target: mojo-compiler {target}, MAX {max_version or 'n/a'} ({args.channel}, {subdir})")
+    if not at_pin:
+        log(f"target: mojo-compiler {target}, MAX {max_version or 'n/a'} ({args.channel}, {subdir})")
 
     results = {
         t.dir: Result(t.dir, repo=t.repo, ref=t.ref, result="disabled", note=t.note) for t in tins
@@ -931,6 +1023,14 @@ def main(argv=None) -> int:
         except subprocess.CalledProcessError as e:
             r.result, r.errors = "fail", [f"clone failed (exit {e.returncode})"]
             log(f"fail {t.dir}: clone failed")
+    if at_pin:
+        target = agreed_pin({d: checkout_pins(work / d) for d in cloned})
+        max_version = args.max_version or max_for(repodata, target)
+        log(f"target: the tins' pin, mojo-compiler {target}, MAX {max_version or 'n/a'} "
+            f"({args.channel}, {subdir})")
+    if not max_version:
+        log(f"warning: no max-core built with mojo-compiler {target}; MAX pins are left alone")
+    pins = target_pins(target, max_version)
     # Every enabled tin counts as a sibling, cloned or not, so a tin that
     # depends on one that could not be cloned is seen to (and skipped).
     siblings = {t.repo.lower(): work / t.dir for t in enabled}
@@ -959,6 +1059,9 @@ def main(argv=None) -> int:
         "target": target,
         "max": max_version,
         "resolved": not args.version,
+        # newest | pin | given
+        "mode": "pin" if at_pin else ("given" if args.version else "newest"),
+        "reason": args.reason,
         "pinned": pinned,
         "channel": args.channel,
         "platform": subdir,
@@ -1004,8 +1107,10 @@ def main(argv=None) -> int:
         res = run_tin(t, work, out, env, args, log, checks)
         res.sha, res.ref, res.repo, res.note = r.sha, r.ref, r.repo, t.note
         results[t.dir] = res
+        failed = ", ".join(f["check"] for f in res.failures)
         log(f"  {t.dir}: {res.result} in {fmt_duration(res.seconds)}"
-            + (f" ({res.failed_check})" if res.failed_check else ""))
+            + (f" ({failed})" if failed else "")
+            + (f"; not run: {', '.join(res.not_run)}" if res.not_run else ""))
 
     ordered = [results[t.dir] for t in tins]
     shown = [results[t.dir] for t in tins if args.job is None or args.job in t.jobs]

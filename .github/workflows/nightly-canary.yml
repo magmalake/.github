@@ -34,7 +34,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: mojo-compiler version to test (empty = newest nightly on max-nightly).
+        description: mojo-compiler version to test (empty = newest nightly on max-nightly; `pin` = the version the tins pin).
         type: string
         default: ""
       only:
@@ -45,7 +45,10 @@ on:
         description: One job to run (libraries, apps, morca, morca-data, examples; empty = all).
         type: string
         default: ""
-  # A change to the canary itself runs the canary.
+  # A change to the canary itself runs the canary, at the tins' own pin
+  # (`--version pin`), not at the newest nightly: the question a pull request
+  # asks is whether the tool works, and a regression in the night's compiler
+  # would make it red for a reason that has nothing to do with the change.
   pull_request:
     paths:
       - tools/canary.py
@@ -63,7 +66,11 @@ concurrency:
 
 jobs:
   canary:
-    name: ${{ matrix.job }}
+    # Says which version, and why: a pull request tests the canary at the pin.
+    name: >-
+      ${{ matrix.job }} (${{ github.event_name == 'pull_request' && 'pinned version, pull request'
+      || (inputs.version == 'pin' && 'pinned version'
+      || (inputs.version && format('mojo {0}', inputs.version) || 'newest nightly')) }})
     runs-on: ubuntu-latest
     # The libraries take about 45 minutes on ubuntu-latest and ~15 GB of disk;
     # morca's two jobs are the longest. The timeout leaves room for a slow day.
@@ -88,7 +95,9 @@ jobs:
       - name: Canary
         if: ${{ !inputs.job || inputs.job == matrix.job }}
         env:
-          VERSION: ${{ github.event.inputs.version }}
+          # A pull request runs at the pin; see `on.pull_request` above.
+          VERSION: ${{ github.event_name == 'pull_request' && 'pin' || github.event.inputs.version }}
+          REASON: ${{ github.event_name == 'pull_request' && 'pull request' || (github.event_name == 'schedule' && 'scheduled' || 'manual dispatch') }}
           ONLY: ${{ github.event.inputs.only }}
           JOB: ${{ matrix.job }}
         run: |
@@ -96,6 +105,7 @@ jobs:
             --work "$RUNNER_TEMP/canary" \
             --out canary-out \
             --job "$JOB" \
+            --reason "$REASON" \
             ${VERSION:+--version "$VERSION"} \
             ${ONLY:+--only "$ONLY"}
 

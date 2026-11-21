@@ -18,10 +18,13 @@
 #             (a ref that no longer exists fails the tin and says so). The
 #             summary's "tested at" column puts any ref but main in bold.
 #   checks    what to run, in the tin's directory, each with `bash -e`. A
-#             string, or { name = "...", run = "...", job = "..." }. Mirror
-#             what the tin's own CI runs for tests; leave out what needs
-#             secrets, a cluster, docker, or a non-Mojo toolchain the tin's
-#             CI tests separately.
+#             string, or { name = "...", run = "...", job = "...",
+#             fatal = true }. Mirror what the tin's own CI runs for tests;
+#             leave out what needs secrets, a cluster, docker, or a non-Mojo
+#             toolchain the tin's CI tests separately. Every check runs even
+#             when one before it failed, and the summary lists each failure;
+#             `fatal = true` marks a check the later ones need (a build whose
+#             output they run), and its failure stops the tin there.
 #   job       which workflow job runs the tin's checks, default "libraries";
 #             a check's own `job` overrides it. Each job is a runner of its
 #             own (`--job`, and the matrix in nightly-canary.yml, which must
@@ -255,7 +258,8 @@ dir = "maws"
 # unpacked and run outside pixi. Not run: install.sh against a local server
 # and the py_reference pytest (no Mojo). sigv4 and xml by source path.
 checks = [
-    "pixi run check",
+    # `check` builds build/maws, which the smoke runs.
+    { name = "pixi run check", run = "pixi run check", fatal = true },
     { name = "cli smoke", run = "pixi run ./build/maws --version" },
     { name = "dist", run = """
 pixi run dist
@@ -343,7 +347,11 @@ job = "apps"
 # CI's `test` job. Left out: the image jobs (docker, and a push to GHCR off
 # main), customs, the morca.dev.toml grep (no Mojo), and test-daily (three
 # hours of GH Archive off the network; not in CI either).
-checks = ["pixi run build", "pixi run test", "pixi run test-register", "pixi run test-upgrade"]
+# test-register and test-upgrade run the build/morca that `build` makes.
+checks = [
+    { name = "pixi run build", run = "pixi run build", fatal = true },
+    "pixi run test", "pixi run test-register", "pixi run test-upgrade",
+]
 timeout = 60
 
 # ── Examples ────────────────────────────────────────────────────────────────
@@ -397,10 +405,22 @@ timeout = 60
 [[tin]]
 dir = "pyarrow-flight.example"
 job = "examples"
-# `check`: every client example against the repo's pyarrow reference server.
-# No Mojo is compiled (the run against flight.mojo's server is a manual step
-# in its README), so this watches only its Python side: pyarrow, Daft.
-checks = ["pixi run check"]
+# `check`: every client example against the repo's pyarrow reference server
+# (no Mojo). `check-mojo`: flight.mojo's Iceberg server built from the sibling
+# checkout, the same examples against it on a generated table, and every row
+# it serves compared with pyarrow's own read of the table's files. Not run:
+# `transports` (the 79.5M-row taxi table) and the in-process Daft source
+# (iceberg.mojo's scan library), neither of which `check-mojo` builds.
+ref = "check-mojo-server"
+note = "drop `ref` when magmalake/pyarrow-flight.example#8 merges"
+checks = ["pixi run check", "pixi run check-mojo"]
+needs = [
+    "flight.mojo", "flare_mlake", "threads.mojo", "iceberg.mojo", "parquet.mojo",
+    "arrow-mlake.mojo", "memory-region.mojo", "avro.mojo", "deflate.mojo",
+    "thrift.mojo", "zstd.mojo", "snappy.mojo", "lz4.mojo", "brotli.mojo",
+    "hashes.mojo", "roaring.mojo", "objectstore.mojo",
+]
+timeout = 60
 
 [[tin]]
 dir = "threads.example"

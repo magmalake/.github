@@ -305,6 +305,16 @@ class TinsFile(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 canary.load_tins(p)
 
+    def test_check_keys(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "t.toml"
+            p.write_text('[[tin]]\ndir = "a"\nchecks = [{ name = "b", run = "x", fatal = true }, "y"]\n')
+            a = canary.load_tins(p)[0]
+            self.assertEqual([(c.name, c.fatal) for c in a.checks], [("b", True), ("y", False)])
+            p.write_text('[[tin]]\ndir = "a"\nchecks = [{ run = "x", needs = ["y"] }]\n')
+            with self.assertRaises(SystemExit):
+                canary.load_tins(p)
+
     def test_a_need_must_come_first(self):
         with tempfile.TemporaryDirectory() as d:
             p = pathlib.Path(d) / "t.toml"
@@ -322,8 +332,8 @@ class Output(unittest.TestCase):
     def test_summary_first_line_names_both_versions(self):
         meta = {"target": NEW, "max": NEW_MAX, "resolved": True, "pinned": [OLD],
                 "platform": "linux-64", "started": "now"}
-        rs = [canary.Result("a", result="fail", failed_check="pixi run test",
-                            errors=["error: x | y"]),
+        rs = [canary.Result("a", result="fail",
+                            failures=[{"check": "pixi run test", "errors": ["error: x | y"]}]),
               canary.Result("b", result="skipped", blocked_by=["a"])]
         md = canary.summary_md(meta, rs)
         first = md.splitlines()[0]
@@ -425,11 +435,17 @@ class EndToEnd(unittest.TestCase):
     """Three local repositories: one fails, one depends on it, one is flaky."""
 
     CHECKS = {
-        "a": ("echo 'error: broke'; exit 1", ""),
+        # A failed check does not stop the tin: a2 and a3 still run.
+        "a": ([{"name": "a1", "run": "echo 'error: broke'; exit 1"},
+               {"name": "a2", "run": "touch a2-ran"},
+               {"name": "a3", "run": "echo 'error: also broke'; exit 1"}], ""),
         "b": ("true", 'needs = ["a"]'),
         "c": ("if [ ! -e once ]; then touch once; echo 'isContiguousAccess crash'; exit 1; fi", ""),
         # A crash that repeats is retried once and then fails.
         "d": ("echo 'Please submit a bug report to https://github.com/modular/modular/issues'; exit 139", ""),
+        # A failed `fatal` check does stop it: `use` needs what `build` makes.
+        "e": ([{"name": "build", "run": "echo 'error: no build'; exit 1", "fatal": True},
+               {"name": "use", "run": "touch used"}], ""),
     }
 
     def test_run(self):
@@ -446,9 +462,16 @@ class EndToEnd(unittest.TestCase):
                 git("init", "-q", "-b", "main", cwd=repo)
                 git("add", ".", cwd=repo)
                 git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x", cwd=repo)
+                if isinstance(check, str):
+                    checks = json.dumps(check)
+                else:
+                    checks = ", ".join(
+                        "{ " + ", ".join(f"{k} = {json.dumps(v)}" for k, v in c.items()) + " }"
+                        for c in check
+                    )
                 tins += (
                     f'[[tin]]\ndir = "{name}"\nurl = "{repo.as_uri()}"\n'
-                    f"checks = [{json.dumps(check)}]\n{extra}\n"
+                    f"checks = [{checks}]\n{extra}\n"
                 )
             (d / "tins.toml").write_text(tins)
             argv = ["--version", NEW, "--max-version", NEW_MAX,
@@ -461,19 +484,99 @@ class EndToEnd(unittest.TestCase):
             res = json.loads((d / "work" / "canary-out" / "canary-results.json").read_text())
             by = {r["tin"]: r for r in res["results"]}
             self.assertEqual(by["a"]["result"], "fail")
-            self.assertEqual(by["a"]["errors"], ["error: broke"])
+            self.assertEqual(by["a"]["failures"], [
+                {"check": "a1", "errors": ["error: broke"]},
+                {"check": "a3", "errors": ["error: also broke"]},
+            ])
+            self.assertEqual(by["a"]["not_run"], [])
+            self.assertTrue((d / "work" / "a" / "a2-ran").exists())
+            self.assertEqual(by["e"]["result"], "fail")
+            self.assertEqual([f["check"] for f in by["e"]["failures"]], ["build"])
+            self.assertEqual(by["e"]["not_run"], ["use"])
+            self.assertFalse((d / "work" / "e" / "used").exists())
             self.assertEqual(by["b"]["result"], "skipped")
             self.assertEqual(by["b"]["blocked_by"], ["a"])
             self.assertEqual(by["c"]["result"], "flaky-retried")
             self.assertEqual(by["d"]["result"], "fail")
             self.assertEqual(len(by["d"]["retries"]), 1)
-            self.assertEqual(by["d"]["errors"][0], "compiler crash")
+            self.assertEqual(by["d"]["failures"][0]["errors"][0], "compiler crash")
             self.assertEqual(res["pinned"], [OLD])
             pixi = (d / "work" / "c" / "pixi.toml").read_text()
             self.assertIn(f'mojo-compiler = "=={NEW}"', pixi)
             self.assertIn("# the pin", pixi)
             md = (d / "work" / "canary-out" / "canary-summary.md").read_text()
             self.assertIn(NEW, md.splitlines()[0])
+            row = next(ln for ln in md.splitlines() if ln.startswith("| a |"))
+            self.assertIn("2 checks failed:<br>`a1`: error: broke<br>`a3`: error: also broke", row)
+            row = next(ln for ln in md.splitlines() if ln.startswith("| e |"))
+            self.assertIn("`build`: error: no build<br>not run (they need the failed `build`): `use`", row)
+
+
+class AtThePin(unittest.TestCase):
+    """`--version pin`: the version is read from the clones, not the channel."""
+
+    def make(self, d: pathlib.Path, pins: dict[str, str]):
+        tins = ""
+        for name, pin in pins.items():
+            r = d / "src" / name
+            (r / "sub").mkdir(parents=True)
+            deps = f'mojo-compiler = "=={pin}"\n' if pin else 'python = "3.12.*"\n'
+            (r / "pixi.toml").write_text(f'[workspace]\nname = "{name}"\n\n[dependencies]\n{deps}')
+            if pin:
+                (r / "sub" / "recipe.yaml").write_text(
+                    f"requirements:\n  host:\n    - mojo-compiler =={pin}\n")
+            git("init", "-q", "-b", "main", cwd=r)
+            git("add", ".", cwd=r)
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x", cwd=r)
+            tins += f'[[tin]]\ndir = "{name}"\nurl = "{r.as_uri()}"\nchecks = ["true"]\n'
+        (d / "tins.toml").write_text(tins)
+
+    def run_canary(self, d, *extra):
+        argv = ["--version", "pin", "--max-version", OLD_MAX, "--tins", str(d / "tins.toml"),
+                "--work", str(d / "work"), "--reason", "pull request", *extra]
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return canary.main(argv)
+
+    def test_checkout_pins(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            self.make(d, {"a": OLD})
+            self.assertEqual(canary.checkout_pins(d / "src" / "a"), {OLD})
+
+    def test_agreed_pin(self):
+        self.assertEqual(canary.agreed_pin({"a": {OLD}, "b": {OLD}, "py": set()}), OLD)
+        with self.assertRaises(SystemExit) as e:
+            canary.agreed_pin({"a": {OLD}, "b": {OLD}, "c": {NEW}})
+        self.assertIn(f"{OLD}: a, b; {NEW}: c", str(e.exception))
+        with self.assertRaises(SystemExit):
+            canary.agreed_pin({"py": set()})
+
+    def test_runs_at_the_pin(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            self.make(d, {"a": OLD, "b": OLD, "py": ""})
+            self.assertEqual(self.run_canary(d), 0)
+            out = d / "work" / "canary-out"
+            res = json.loads((out / "canary-results.json").read_text())
+            self.assertEqual((res["target"], res["mode"], res["reason"]), (OLD, "pin", "pull request"))
+            self.assertEqual(res["pinned"], [OLD])
+            # Nothing was re-pinned.
+            self.assertEqual((d / "work" / "a" / "pixi.toml").read_text(),
+                             (d / "src" / "a" / "pixi.toml").read_text())
+            first = (out / "canary-summary.md").read_text().splitlines()[0]
+            self.assertIn(f"pinned version (pull request): `mojo-compiler {OLD}`", first)
+            self.assertIn("tests the canary itself", first)
+
+    def test_tins_that_disagree_are_an_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            self.make(d, {"a": OLD, "b": NEW})
+            with self.assertRaises(SystemExit) as e:
+                self.run_canary(d)
+            self.assertIn("do not agree", str(e.exception))
+            self.assertIn(f"{NEW}: b", str(e.exception))
 
 
 class RefsAccessJobs(unittest.TestCase):
