@@ -4,7 +4,7 @@ The manifests under fixtures/canary/ are real files from the tins' main
 branches on 2026-11-20: iceberg.mojo (sibling git dependencies, a
 `subdirectory`, comments everywhere), parquet.mojo/full, json_mlake (MAX pins
 in run-constraints and an extra), encoder.mojo (max-core), mozz_mlake (a
-non-sibling git dependency), maws (still on 1.2.0, with a range pin), and the
+non-sibling git dependency), maws (its manifest from before its port, on 1.2.0 with a range pin), and the
 three rattler-build recipes.
 """
 
@@ -272,6 +272,49 @@ class TinsFile(unittest.TestCase):
         iceberg = next(t for t in tins if t.dir == "iceberg.mojo")
         self.assertTrue(any("carrow-scan-lib" in c.run for c in iceberg.checks))
 
+    def test_refs_and_jobs(self):
+        tins = {t.dir: t for t in canary.load_tins(HERE.parent / "tools" / "canary-tins.toml")}
+        # The default branch unless the file names one.
+        self.assertEqual(tins["iceberg.mojo"].ref, "")
+        self.assertEqual(tins["iceberg.mojo"].jobs, ["libraries"])
+        # The three apps: at their default branch, like every other tin.
+        for d, repo in [("dista.mojo", "morca-dev/dista"), ("morca", "morca-dev/morca"),
+                        ("census", "morca-dev/census")]:
+            self.assertEqual(tins[d].repo, repo)
+            self.assertEqual(tins[d].ref, "")
+        # A check's job overrides its tin's.
+        self.assertEqual(tins["morca"].jobs, ["morca", "morca-data"])
+        self.assertTrue(tins["duckdb.extension"].submodules)
+        self.assertFalse(tins["threads.example"].enabled)
+        for d in ["xml.mojo", "sigv4.mojo", "maws", "restate.mojo"]:
+            self.assertTrue(tins[d].enabled, d)
+        self.assertEqual(tins["maws"].needs, ["sigv4.mojo", "xml.mojo"])
+        self.assertFalse(tins["requests"].enabled)
+
+    def test_the_workflow_runs_every_job(self):
+        jobs = {j for t in canary.load_tins(HERE.parent / "tools" / "canary-tins.toml") for j in t.jobs}
+        wf = (HERE.parent / ".github" / "workflows" / "nightly-canary.yml").read_text()
+        line = next(ln for ln in wf.splitlines() if ln.strip().startswith("job: ["))
+        matrix = {j.strip() for j in line.split("[", 1)[1].rstrip("]").split(",")}
+        self.assertEqual(matrix, jobs)
+
+    def test_unknown_keys_are_an_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "t.toml"
+            p.write_text('[[tin]]\ndir = "a"\nbranch = "x"\n')
+            with self.assertRaises(SystemExit):
+                canary.load_tins(p)
+
+    def test_check_keys(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "t.toml"
+            p.write_text('[[tin]]\ndir = "a"\nchecks = [{ name = "b", run = "x", fatal = true }, "y"]\n')
+            a = canary.load_tins(p)[0]
+            self.assertEqual([(c.name, c.fatal) for c in a.checks], [("b", True), ("y", False)])
+            p.write_text('[[tin]]\ndir = "a"\nchecks = [{ run = "x", needs = ["y"] }]\n')
+            with self.assertRaises(SystemExit):
+                canary.load_tins(p)
+
     def test_a_need_must_come_first(self):
         with tempfile.TemporaryDirectory() as d:
             p = pathlib.Path(d) / "t.toml"
@@ -289,8 +332,8 @@ class Output(unittest.TestCase):
     def test_summary_first_line_names_both_versions(self):
         meta = {"target": NEW, "max": NEW_MAX, "resolved": True, "pinned": [OLD],
                 "platform": "linux-64", "started": "now"}
-        rs = [canary.Result("a", result="fail", failed_check="pixi run test",
-                            errors=["error: x | y"]),
+        rs = [canary.Result("a", result="fail",
+                            failures=[{"check": "pixi run test", "errors": ["error: x | y"]}]),
               canary.Result("b", result="skipped", blocked_by=["a"])]
         md = canary.summary_md(meta, rs)
         first = md.splitlines()[0]
@@ -299,6 +342,89 @@ class Output(unittest.TestCase):
         self.assertIn("newest", first)
         self.assertIn("error: x \\| y", md)
         self.assertIn("blocked by a", md)
+
+    def test_summary_names_the_ref(self):
+        meta = {"target": NEW, "max": NEW_MAX, "resolved": True, "pinned": [OLD],
+                "platform": "linux-64", "started": "now", "job": "apps"}
+        rs = [canary.Result("lib", ref="main", sha="a" * 40, result="pass"),
+              canary.Result("app", ref="mojo-1.3-nightly", sha="b" * 40, result="pass",
+                            note="drop `ref` when x#1 merges"),
+              canary.Result("priv", result="no-access", errors=["cannot read o/priv"]),
+              canary.Result("user", result="no-access", blocked_by=["priv"])]
+        md = canary.summary_md(meta, rs)
+        self.assertIn("| lib | `main` @ `aaaaaaa` | pass |", md)
+        self.assertIn("| app | **`mojo-1.3-nightly`** @ `bbbbbbb` | pass |  | drop `ref`", md)
+        self.assertIn("| priv |  | **no access** |  | cannot read o/priv |", md)
+        self.assertIn("needs priv, which this token cannot read", md)
+        self.assertIn("Job `apps`", md)
+
+
+def ls_remote(stdout="", stderr="", code=0):
+    return subprocess.CompletedProcess([], code, stdout, stderr)
+
+
+class Access(unittest.TestCase):
+    TIN = canary.Tin("dista.mojo", "morca-dev/dista", "", "", [], [], False, 45, True, "")
+    HEADS = (
+        "ref: refs/heads/main\tHEAD\n"
+        "1111111111111111111111111111111111111111\tHEAD\n"
+        "2222222222222222222222222222222222222222\trefs/heads/mojo-1.3-nightly\n"
+    )
+
+    def probe(self, tin, *results):
+        with mock.patch.object(canary.subprocess, "run", side_effect=list(results)) as run, \
+                mock.patch.object(canary.time, "sleep"):
+            return canary.probe(tin, {}), run
+
+    def test_default_branch(self):
+        pr, run = self.probe(self.TIN, ls_remote(self.HEADS))
+        self.assertEqual((pr.status, pr.ref), ("ok", "main"))
+        self.assertEqual(run.call_args.args[0],
+                         ["git", "ls-remote", "--symref", "https://github.com/morca-dev/dista", "HEAD"])
+
+    def test_named_ref(self):
+        import dataclasses
+        tin = dataclasses.replace(self.TIN, ref="mojo-1.3-nightly")
+        pr, run = self.probe(tin, ls_remote(self.HEADS))
+        self.assertEqual((pr.status, pr.ref), ("ok", "mojo-1.3-nightly"))
+        self.assertIn("refs/heads/mojo-1.3-nightly", run.call_args.args[0])
+
+    def test_a_ref_that_is_gone(self):
+        import dataclasses
+        tin = dataclasses.replace(self.TIN, ref="mojo-1.3-nightly")
+        pr, _ = self.probe(tin, ls_remote("ref: refs/heads/main\tHEAD\n1\tHEAD\n"))
+        self.assertEqual(pr.status, "no-ref")
+        self.assertIn("drop `ref` from dista.mojo", pr.message)
+
+    def test_private_repository(self):
+        for err in [
+            "remote: Repository not found.\nfatal: repository 'https://github.com/morca-dev/dista/' not found\n",
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
+        ]:
+            with self.subTest(err):
+                pr, run = self.probe(self.TIN, ls_remote(stderr=err, code=128))
+                self.assertEqual(pr.status, "no-access")
+                self.assertEqual(run.call_count, 1)  # not retried
+                self.assertIn("morca-dev/dista", pr.message)
+
+    def test_network_errors_are_retried_then_fail(self):
+        bad = ls_remote(stderr="fatal: unable to access: Could not resolve host\n", code=128)
+        pr, run = self.probe(self.TIN, bad, bad, ls_remote(self.HEADS))
+        self.assertEqual(pr.status, "ok")
+        pr, run = self.probe(self.TIN, bad, bad, bad)
+        self.assertEqual(pr.status, "error")
+        self.assertIn("Could not resolve host", pr.message)
+
+    def test_token_goes_to_git_only(self):
+        env = canary.git_env({"PATH": "/bin", canary.TOKEN_ENV: "s3cret"})
+        self.assertNotIn(canary.TOKEN_ENV, env)
+        self.assertEqual(env["GIT_TERMINAL_PROMPT"], "0")
+        self.assertEqual(env["GIT_CONFIG_COUNT"], "1")
+        self.assertEqual(env["GIT_CONFIG_KEY_0"], "http.https://github.com/.extraheader")
+        import base64
+        self.assertEqual(env["GIT_CONFIG_VALUE_0"],
+                         "AUTHORIZATION: basic " + base64.b64encode(b"x-access-token:s3cret").decode())
+        self.assertNotIn("GIT_CONFIG_COUNT", canary.git_env({"PATH": "/bin"}))
 
 
 def git(*args, cwd):
@@ -309,11 +435,17 @@ class EndToEnd(unittest.TestCase):
     """Three local repositories: one fails, one depends on it, one is flaky."""
 
     CHECKS = {
-        "a": ("echo 'error: broke'; exit 1", ""),
+        # A failed check does not stop the tin: a2 and a3 still run.
+        "a": ([{"name": "a1", "run": "echo 'error: broke'; exit 1"},
+               {"name": "a2", "run": "touch a2-ran"},
+               {"name": "a3", "run": "echo 'error: also broke'; exit 1"}], ""),
         "b": ("true", 'needs = ["a"]'),
         "c": ("if [ ! -e once ]; then touch once; echo 'isContiguousAccess crash'; exit 1; fi", ""),
         # A crash that repeats is retried once and then fails.
         "d": ("echo 'Please submit a bug report to https://github.com/modular/modular/issues'; exit 139", ""),
+        # A failed `fatal` check does stop it: `use` needs what `build` makes.
+        "e": ([{"name": "build", "run": "echo 'error: no build'; exit 1", "fatal": True},
+               {"name": "use", "run": "touch used"}], ""),
     }
 
     def test_run(self):
@@ -330,9 +462,16 @@ class EndToEnd(unittest.TestCase):
                 git("init", "-q", "-b", "main", cwd=repo)
                 git("add", ".", cwd=repo)
                 git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x", cwd=repo)
+                if isinstance(check, str):
+                    checks = json.dumps(check)
+                else:
+                    checks = ", ".join(
+                        "{ " + ", ".join(f"{k} = {json.dumps(v)}" for k, v in c.items()) + " }"
+                        for c in check
+                    )
                 tins += (
                     f'[[tin]]\ndir = "{name}"\nurl = "{repo.as_uri()}"\n'
-                    f"checks = [{json.dumps(check)}]\n{extra}\n"
+                    f"checks = [{checks}]\n{extra}\n"
                 )
             (d / "tins.toml").write_text(tins)
             argv = ["--version", NEW, "--max-version", NEW_MAX,
@@ -345,19 +484,221 @@ class EndToEnd(unittest.TestCase):
             res = json.loads((d / "work" / "canary-out" / "canary-results.json").read_text())
             by = {r["tin"]: r for r in res["results"]}
             self.assertEqual(by["a"]["result"], "fail")
-            self.assertEqual(by["a"]["errors"], ["error: broke"])
+            self.assertEqual(by["a"]["failures"], [
+                {"check": "a1", "errors": ["error: broke"]},
+                {"check": "a3", "errors": ["error: also broke"]},
+            ])
+            self.assertEqual(by["a"]["not_run"], [])
+            self.assertTrue((d / "work" / "a" / "a2-ran").exists())
+            self.assertEqual(by["e"]["result"], "fail")
+            self.assertEqual([f["check"] for f in by["e"]["failures"]], ["build"])
+            self.assertEqual(by["e"]["not_run"], ["use"])
+            self.assertFalse((d / "work" / "e" / "used").exists())
             self.assertEqual(by["b"]["result"], "skipped")
             self.assertEqual(by["b"]["blocked_by"], ["a"])
             self.assertEqual(by["c"]["result"], "flaky-retried")
             self.assertEqual(by["d"]["result"], "fail")
             self.assertEqual(len(by["d"]["retries"]), 1)
-            self.assertEqual(by["d"]["errors"][0], "compiler crash")
+            self.assertEqual(by["d"]["failures"][0]["errors"][0], "compiler crash")
             self.assertEqual(res["pinned"], [OLD])
             pixi = (d / "work" / "c" / "pixi.toml").read_text()
             self.assertIn(f'mojo-compiler = "=={NEW}"', pixi)
             self.assertIn("# the pin", pixi)
             md = (d / "work" / "canary-out" / "canary-summary.md").read_text()
             self.assertIn(NEW, md.splitlines()[0])
+            row = next(ln for ln in md.splitlines() if ln.startswith("| a |"))
+            self.assertIn("2 checks failed:<br>`a1`: error: broke<br>`a3`: error: also broke", row)
+            row = next(ln for ln in md.splitlines() if ln.startswith("| e |"))
+            self.assertIn("`build`: error: no build<br>not run (they need the failed `build`): `use`", row)
+
+
+class AtThePin(unittest.TestCase):
+    """`--version pin`: the version is read from the clones, not the channel."""
+
+    def make(self, d: pathlib.Path, pins: dict[str, str]):
+        tins = ""
+        for name, pin in pins.items():
+            r = d / "src" / name
+            (r / "sub").mkdir(parents=True)
+            deps = f'mojo-compiler = "=={pin}"\n' if pin else 'python = "3.12.*"\n'
+            (r / "pixi.toml").write_text(f'[workspace]\nname = "{name}"\n\n[dependencies]\n{deps}')
+            if pin:
+                (r / "sub" / "recipe.yaml").write_text(
+                    f"requirements:\n  host:\n    - mojo-compiler =={pin}\n")
+            git("init", "-q", "-b", "main", cwd=r)
+            git("add", ".", cwd=r)
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x", cwd=r)
+            tins += f'[[tin]]\ndir = "{name}"\nurl = "{r.as_uri()}"\nchecks = ["true"]\n'
+        (d / "tins.toml").write_text(tins)
+
+    def run_canary(self, d, *extra):
+        argv = ["--version", "pin", "--max-version", OLD_MAX, "--tins", str(d / "tins.toml"),
+                "--work", str(d / "work"), "--reason", "pull request", *extra]
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return canary.main(argv)
+
+    def test_checkout_pins(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            self.make(d, {"a": OLD})
+            self.assertEqual(canary.checkout_pins(d / "src" / "a"), {OLD})
+
+    def test_agreed_pin(self):
+        self.assertEqual(canary.agreed_pin({"a": {OLD}, "b": {OLD}, "py": set()}), OLD)
+        with self.assertRaises(SystemExit) as e:
+            canary.agreed_pin({"a": {OLD}, "b": {OLD}, "c": {NEW}})
+        self.assertIn(f"{OLD}: a, b; {NEW}: c", str(e.exception))
+        with self.assertRaises(SystemExit):
+            canary.agreed_pin({"py": set()})
+
+    def test_runs_at_the_pin(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            self.make(d, {"a": OLD, "b": OLD, "py": ""})
+            self.assertEqual(self.run_canary(d), 0)
+            out = d / "work" / "canary-out"
+            res = json.loads((out / "canary-results.json").read_text())
+            self.assertEqual((res["target"], res["mode"], res["reason"]), (OLD, "pin", "pull request"))
+            self.assertEqual(res["pinned"], [OLD])
+            # Nothing was re-pinned.
+            self.assertEqual((d / "work" / "a" / "pixi.toml").read_text(),
+                             (d / "src" / "a" / "pixi.toml").read_text())
+            first = (out / "canary-summary.md").read_text().splitlines()[0]
+            self.assertIn(f"pinned version (pull request): `mojo-compiler {OLD}`", first)
+            self.assertIn("tests the canary itself", first)
+
+    def test_tins_that_disagree_are_an_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            self.make(d, {"a": OLD, "b": NEW})
+            with self.assertRaises(SystemExit) as e:
+                self.run_canary(d)
+            self.assertIn("do not agree", str(e.exception))
+            self.assertIn(f"{NEW}: b", str(e.exception))
+
+
+class RefsAccessJobs(unittest.TestCase):
+    """A branch to test at, a ref that is gone, a repository this token can't
+    read and a tin that depends on it, and checks in two jobs."""
+
+    def make(self, d: pathlib.Path):
+        def repo(name, deps="", branch=None):
+            r = d / "src" / name
+            r.mkdir(parents=True)
+            (r / "pixi.toml").write_text(
+                f'[workspace]\nname = "{name}"\n\n[dependencies]\n'
+                f'mojo-compiler = "=={OLD}"\n{deps}'
+            )
+            git("init", "-q", "-b", "main", cwd=r)
+            git("add", ".", cwd=r)
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x", cwd=r)
+            if branch:
+                git("checkout", "-qb", branch, cwd=r)
+                (r / "port").write_text("")
+                git("add", ".", cwd=r)
+                git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "port", cwd=r)
+                git("checkout", "-q", "main", cwd=r)
+            return r.as_uri()
+
+        tins = f"""
+[[tin]]
+dir = "priv"
+repo = "o/priv"
+url = "{repo("priv")}"
+checks = ["true"]
+
+[[tin]]
+dir = "user"
+url = "{repo("user", 'priv-mojo = { git = "https://github.com/o/priv", rev = "abc" }' + chr(10))}"
+checks = ["true"]
+
+[[tin]]
+dir = "port"
+url = "{repo("port", branch="mojo-1.3-nightly")}"
+ref = "mojo-1.3-nightly"
+note = "drop `ref` when o/port#1 merges"
+# The port branch is what is checked out; the token is not in the check's env.
+checks = ["test -e port", 'test -z "${{CANARY_GIT_TOKEN:-}}"']
+
+[[tin]]
+dir = "merged"
+url = "{repo("merged")}"
+ref = "mojo-1.3-nightly"
+checks = ["true"]
+
+[[tin]]
+dir = "app"
+url = "{repo("app")}"
+job = "apps"
+checks = ["touch ran-apps", {{ name = "lib-part", run = "touch ran-libraries", job = "libraries" }}]
+"""
+        (d / "tins.toml").write_text(tins)
+
+    def run_canary(self, d, *extra):
+        real = canary.probe
+
+        def probe(tin, env, attempts=3):
+            if tin.dir == "priv":
+                return canary.Probe("no-access", message="cannot read o/priv with this token")
+            return real(tin, env, attempts)
+
+        argv = ["--version", NEW, "--max-version", NEW_MAX, "--tins", str(d / "tins.toml"),
+                "--work", str(d / "work"), *extra]
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        env[canary.TOKEN_ENV] = "s3cret"
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(canary, "probe", side_effect=probe), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code = canary.main(argv)
+        out = d / "work" / "canary-out"
+        res = json.loads((out / "canary-results.json").read_text())
+        return code, {r["tin"]: r for r in res["results"]}, (out / "canary-summary.md").read_text()
+
+    def test_libraries_job(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            self.make(d)
+            code, by, md = self.run_canary(d, "--job", "libraries")
+            self.assertEqual(code, 1)  # `merged` fails; no access alone would not
+            self.assertEqual(by["priv"]["result"], "no-access")
+            self.assertFalse((d / "work" / "priv").exists())
+            self.assertEqual(by["user"]["result"], "no-access")
+            self.assertEqual(by["user"]["blocked_by"], ["priv"])
+            self.assertEqual(by["port"]["result"], "pass", by["port"])
+            self.assertEqual(by["port"]["ref"], "mojo-1.3-nightly")
+            self.assertEqual(by["merged"]["result"], "fail")
+            self.assertIn("no branch or tag `mojo-1.3-nightly`", by["merged"]["errors"][0])
+            # Only the check of this job ran.
+            self.assertEqual(by["app"]["result"], "pass")
+            self.assertTrue((d / "work" / "app" / "ran-libraries").exists())
+            self.assertFalse((d / "work" / "app" / "ran-apps").exists())
+            self.assertIn("**`mojo-1.3-nightly`** @ `", md)
+            self.assertIn("drop `ref` when o/port#1 merges", md)
+            self.assertIn("**no access**", md)
+            # The token never lands in a checkout's config.
+            self.assertNotIn("s3cret", (d / "work" / "port" / ".git" / "config").read_text())
+
+    def test_apps_job_lists_only_its_tins(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            self.make(d)
+            code, by, md = self.run_canary(d, "--job", "apps")
+            self.assertEqual(code, 0)
+            self.assertEqual(by["port"]["result"], "not-run")
+            self.assertTrue((d / "work" / "app" / "ran-apps").exists())
+            self.assertFalse((d / "work" / "app" / "ran-libraries").exists())
+            rows = [ln.split("|")[1].strip() for ln in md.splitlines() if ln.startswith("| ")]
+            self.assertEqual(rows[1:], ["app"])
+
+    def test_no_access_alone_does_not_fail_the_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = pathlib.Path(d)
+            self.make(d)
+            code, by, _ = self.run_canary(d, "--only", "priv,user,port")
+            self.assertEqual(code, 0)
+            self.assertEqual(by["user"]["result"], "no-access")
 
 
 if __name__ == "__main__":
